@@ -424,7 +424,13 @@ const DEFAULT_SESSIONS = [
 const GRACE = 20;                       // minutes either side of a session window
 const toMin = t => { const [h,m] = t.split(":").map(Number); return h*60 + m; };
 const nowMin = () => { const d = new Date(); return d.getHours()*60 + d.getMinutes(); };
-const today = () => new Date().toISOString().slice(0,10);
+// Local date, never UTC. India is UTC+5:30, so toISOString() would say
+// "yesterday" until 05:30 -- exactly when volunteers set up for the 06:00
+// prayer, and every one of those scans would carry the wrong day.
+const today = () => {
+  const d = new Date(), z = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
+};
 const $ = id => document.getElementById(id);
 
 /* There is deliberately no activeAt(venue) any more. Choosing a session by

@@ -479,7 +479,10 @@ const fmtDay = d => new Date(d + "T00:00:00")
   .toLocaleDateString([], { weekday:"short", day:"numeric", month:"short" });
 const shortDay = d => new Date(d + "T00:00:00")
   .toLocaleDateString([], { day:"numeric", month:"short" });
-const today = () => new Date().toISOString().slice(0,10);
+const today = () => {
+  const d = new Date(), z = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
+};
 const nowMin = () => { const d = new Date(); return d.getHours()*60 + d.getMinutes(); };
 const toMin = t => { const [h,m] = String(t).split(":").map(Number); return h*60 + m; };
 const hhmm = t => String(t).slice(0,5);
@@ -535,11 +538,16 @@ async function loadDay(day){
 
   D.day = day;
   D.totals = { linked, issued, voided, scans };
-  D.rows = (D.byDay[day] || [])
-    .map(id => D.sessions.find(s => s.id === id))
-    .filter(Boolean)
-    .sort((a,b) => toMin(a.starts) - toMin(b.starts))
-    .map(s => ({ ...s, present: present[s.id] || 0 }));
+  // Scheduled sessions for the day, plus any session that has scans on it
+  // even if the calendar never said it ran -- a rehearsal, or an override
+  // into a session on the wrong day. Data that exists must be visible.
+  const scheduled = D.byDay[day] || [];
+  const withScans = counts.map(c => c.session_id).filter(id => !scheduled.includes(id));
+  D.rows = [...scheduled, ...withScans]
+    .map(id => D.sessions.find(s => s.id === id) ||
+               { id, name: id, venue: "—", starts: "00:00", ends: "00:00", unknown: true })
+    .map(s => ({ ...s, present: present[s.id] || 0, unscheduled: !scheduled.includes(s.id) }))
+    .sort((a,b) => toMin(a.starts) - toMin(b.starts));
 }
 
 const volName = id => (D.volunteers.find(v => v.id === id) || {}).name || id;
@@ -588,7 +596,8 @@ function renderLive(){
           <span class="note" style="min-width:36px;text-align:right">${pct}%</span>
         </div>
       </td>
-      <td>${live ? '<span class="tag live">live</span>'
+      <td>${r.unscheduled ? '<span class="tag off" title="Has scans but is not on the calendar for this day">not scheduled</span>'
+                 : live ? '<span class="tag live">live</span>'
                  : past ? '<span class="tag done">done</span>'
                         : '<span class="tag soon">upcoming</span>'}</td>`;
     body.appendChild(tr);
@@ -1109,11 +1118,15 @@ document.querySelectorAll(".tab").forEach(b => {
 
 function fillDayPicker(){
   const sel = $("dayPick"), keep = sel.value;
-  const days = D.days.length ? D.days : [today()];
-  sel.innerHTML = days.map((d, i) =>
-    `<option value="${d}">Day ${i + 1} · ${fmtDay(d)}</option>`).join("");
-  sel.value = days.includes(keep) ? keep
-            : days.includes(today()) ? today() : days[0];
+  const cal = D.days.slice();
+  const opts = cal.map((d, i) => `<option value="${d}">Day ${i + 1} · ${fmtDay(d)}</option>`);
+  // Before the event, today is not a calendar day, but rehearsal scans land
+  // on it and must be findable.
+  if (!cal.includes(today()))
+    opts.unshift(`<option value="${today()}">Today · ${fmtDay(today())} (not on calendar)</option>`);
+  sel.innerHTML = opts.join("");
+  const all = [...(cal.includes(today()) ? [] : [today()]), ...cal];
+  sel.value = all.includes(keep) ? keep : today();
 }
 
 async function refreshDay(){
