@@ -390,19 +390,31 @@ grant execute on function volunteer_login(text, text) to anon, authenticated;
 -- the phone represented -- a leaked publishable key on its own still cannot
 -- read it. Includes pid, name and void, so a reissue done on one phone
 -- reaches every other phone the next time its volunteer logs in with signal.
+--
+-- Returns ONE jsonb document, not a set of rows. PostgREST caps a set at its
+-- max-rows (1000 on Supabase) and truncates silently; a phone would then hold
+-- serials 1-1000 and refuse every badge above that as "not recognised". A
+-- single json value is not subject to the cap. Found with badge serial 1500.
+drop function if exists download_roll(text, text);
 create or replace function download_roll(p_username text, p_password text)
-returns table (code text, serial int, name text, pid text, void boolean)
+returns jsonb
 language sql stable security definer set search_path = public as $$
-  select p.code, p.serial, p.name, p.pid, p.void
-  from participants p
-  where exists (
-    select 1 from volunteers v
-    where lower(v.username) = lower(trim(p_username))
-      and v.active
-      and v.pass_hash is not null
-      and v.pass_hash = extensions.crypt(p_password, v.pass_hash)
-  )
-  order by p.serial;
+  select case
+    when exists (
+      select 1 from volunteers v
+      where lower(v.username) = lower(trim(p_username))
+        and v.active
+        and v.pass_hash is not null
+        and v.pass_hash = extensions.crypt(p_password, v.pass_hash)
+    )
+    then coalesce(
+      (select jsonb_agg(jsonb_build_object(
+                 'code', p.code, 'serial', p.serial, 'name', p.name,
+                 'pid', p.pid, 'void', p.void) order by p.serial)
+         from participants p),
+      '[]'::jsonb)
+    else '[]'::jsonb
+  end;
 $$;
 
 revoke all on function download_roll(text, text) from public;

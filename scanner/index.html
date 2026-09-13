@@ -1010,8 +1010,10 @@ async function downloadRoll(username, password){
       body: JSON.stringify({ p_username: username, p_password: password })
     });
     if (!r.ok) return false;
+    // One jsonb document, not rows: PostgREST caps row sets at 1000 and
+    // truncates silently, which is how serial 1500 was once "not recognised".
     const rows = await r.json();
-    if (!rows.length) return false;
+    if (!Array.isArray(rows) || !rows.length) return false;
     await putPeople(rows.map(x => ({
       code: x.code, serial: x.serial, name: x.name || "", pid: x.pid || "",
       void: !!x.void
