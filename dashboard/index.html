@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attendance — organiser</title>
+<style>
+:root{
+  --ink:#0E1A24; --surface:#16242F; --raised:#1F3140; --line:#2C4152;
+  --text:#F2F5F7; --muted:#8FA3B0;
+  --ok:#2FBF71; --warn:#F2A73B; --bad:#E5484D; --accent:#58B8E8;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--ink);color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:15px;line-height:1.45;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:24px 18px 60px}
+h1{font-size:24px;font-weight:650;letter-spacing:-.02em;margin:0 0 4px}
+h2{font-size:16px;font-weight:620;margin:30px 0 10px}
+.sub{color:var(--muted);margin:0 0 22px}
+.note{font-size:13px;color:var(--muted)}
+.bad-text{color:var(--bad)}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+input,select{
+  font:inherit;color:var(--text);background:var(--surface);
+  border:1px solid var(--line);border-radius:9px;padding:10px 12px;width:100%;
+}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  min-height:42px;border-radius:10px;background:var(--accent);color:#06131C;
+  font-weight:640;padding:0 16px;
+}
+.btn.sec{background:var(--raised);color:var(--text);border:1px solid var(--line)}
+.btn[disabled]{opacity:.45}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+
+.screen{display:none}
+.screen.on{display:block}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:16px}
+.login{max-width:380px;margin:12vh auto}
+
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+  border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:8px}
+.bar .grow{flex:1;min-width:0}
+.live{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.dot.stale{background:var(--warn)}
+.dot.off{background:var(--bad)}
+
+.tiles{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-top:16px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:14px 16px}
+.tile .k{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.tile .v{font-size:30px;font-weight:680;font-variant-numeric:tabular-nums;line-height:1.15;margin-top:4px}
+
+table{width:100%;border-collapse:collapse;font-size:14.5px}
+th{text-align:left;font-weight:600;color:var(--muted);font-size:12.5px;
+  text-transform:uppercase;letter-spacing:.05em;padding:0 10px 8px;white-space:nowrap}
+td{padding:10px;border-top:1px solid var(--line);vertical-align:middle}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.scroll{overflow-x:auto}
+tr.now td{background:rgba(88,184,232,.07)}
+
+.bar-track{height:7px;border-radius:4px;background:var(--raised);overflow:hidden;min-width:90px}
+.bar-fill{height:100%;background:var(--accent);border-radius:4px}
+.bar-fill.high{background:var(--ok)}
+.bar-fill.low{background:var(--warn)}
+
+.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600}
+.tag.live{background:rgba(47,191,113,.18);color:var(--ok)}
+.tag.done{background:var(--raised);color:var(--muted)}
+.tag.soon{background:rgba(88,184,232,.15);color:var(--accent)}
+
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:.05em}
+.empty{color:var(--muted);padding:20px 0;text-align:center}
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<section id="s-login" class="screen on">
+  <div class="wrap">
+    <div class="card login">
+      <h1>Attendance</h1>
+      <p class="sub">Organiser sign-in.</p>
+      <div class="field">
+        <label for="url">Project URL</label>
+        <input id="url" placeholder="https://xxxx.supabase.co" inputmode="url" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="key">Publishable key</label>
+        <input id="key" placeholder="sb_publishable_…" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username" autocapitalize="off">
+      </div>
+      <div class="field">
+        <label for="pw">Password</label>
+        <input id="pw" type="password" autocomplete="current-password">
+      </div>
+      <button class="btn" id="loginBtn" style="width:100%">Sign in</button>
+      <p class="note bad-text" id="loginErr"></p>
+      <p class="note">This key is the same public one the phones carry. It grants
+        nothing on its own — the roll is readable only after you sign in as an
+        organiser.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ DASHBOARD ============ -->
+<section id="s-dash" class="screen">
+  <div class="wrap">
+    <div class="bar">
+      <div class="grow">
+        <h1 style="margin:0">Attendance</h1>
+        <span class="live"><i class="dot" id="liveDot"></i><span id="liveText">connecting…</span></span>
+      </div>
+      <div class="row">
+        <select id="dayPick" style="width:auto;min-width:170px"></select>
+        <button class="btn sec" id="refreshBtn">Refresh</button>
+        <button class="btn sec" id="outBtn">Sign out</button>
+      </div>
+    </div>
+
+    <div class="tiles">
+      <div class="tile"><div class="k">Participants linked</div><div class="v" id="tLinked">—</div></div>
+      <div class="tile"><div class="k">Scans today</div><div class="v" id="tScans">—</div></div>
+      <div class="tile"><div class="k">Badges issued</div><div class="v" id="tIssued">—</div></div>
+      <div class="tile"><div class="k">Reissued / void</div><div class="v" id="tVoid">—</div></div>
+    </div>
+
+    <h2>Sessions</h2>
+    <div class="scroll">
+      <table id="sessTable">
+        <thead><tr>
+          <th>Session</th><th>Venue</th><th>Time</th>
+          <th class="num">Present</th><th class="num">Of</th><th style="width:150px">Turnout</th><th></th>
+        </tr></thead>
+        <tbody id="sessBody"></tbody>
+      </table>
+    </div>
+    <p class="empty" id="sessEmpty" style="display:none">
+      Nothing scheduled for this day. Run <span class="mono">seed_sessions.sql</span> to load the programme.
+    </p>
+
+    <h2>Export</h2>
+    <div class="row">
+      <button class="btn sec" id="expScans">Scans for this day</button>
+      <button class="btn sec" id="expLinks">Badge links (all)</button>
+      <button class="btn sec" id="expRoll">Participant roll</button>
+    </div>
+    <p class="note" id="expNote"></p>
+
+    <h2>Absentees</h2>
+    <div class="row" style="margin-bottom:12px">
+      <select id="absSess" style="width:auto;min-width:220px"></select>
+      <button class="btn sec" id="absBtn">Show</button>
+      <button class="btn sec" id="absCsv" disabled>Download CSV</button>
+    </div>
+    <div class="scroll">
+      <table id="absTable" style="display:none">
+        <thead><tr><th>Name</th><th>Participant ID</th><th>Badge</th></tr></thead>
+        <tbody id="absBody"></tbody>
+      </table>
+    </div>
+    <p class="note" id="absNote"></p>
+  </div>
+</section>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ * No dependencies, same as the scanner. Supabase Auth and PostgREST are
+ * both plain HTTP, so signing in and reading tables is fetch and nothing
+ * else. Keeps this deployable as two static files next to the scanner.
+ * ------------------------------------------------------------------ */
+
+const $ = id => document.getElementById(id);
+const A = { url:"", key:"", token:"", refresh:"", expires:0, email:"" };
+const POLL = 20000;                       // live counts, without hammering the API
+let poller = null, absRows = [];
+
+const REMEMBER = "attendance.organiser";  // connection details only, never the token
+
+/* ---------------------------------------------------------------- http */
+
+function api(path, opts = {}){
+  return fetch(A.url.replace(/\/+$/,"") + path, {
+    ...opts,
+    headers: {
+      "apikey": A.key,
+      "Authorization": "Bearer " + (A.token || A.key),
+      "Content-Type": "application/json",
+      ...(opts.headers || {})
+    }
+  });
+}
+
+async function rest(path){
+  const res = await api("/rest/v1" + path);
+  if (res.status === 401 || res.status === 403){
+    // The session expired, or this account is not in `organisers`.
+    throw new Error("Not authorised to read this. Is your account in the organisers table?");
+  }
+  if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=> "")}`);
+  return res.json();
+}
+
+async function signIn(email, password){
+  const res = await fetch(A.url.replace(/\/+$/,"") + "/auth/v1/token?grant_type=password", {
+    method:"POST",
+    headers:{ "apikey":A.key, "Content-Type":"application/json" },
+    body: JSON.stringify({ email, password })
+  });
+  const body = await res.json().catch(()=> ({}));
+  if (!res.ok) throw new Error(body.error_description || body.msg || "Sign-in failed.");
+  A.token = body.access_token;
+  A.refresh = body.refresh_token;
+  A.expires = Date.now() + (body.expires_in || 3600) * 1000;
+  A.email = body.user?.email || email;
+}
+
+async function refreshToken(){
+  if (!A.refresh) return false;
+  const res = await fetch(A.url.replace(/\/+$/,"") + "/auth/v1/token?grant_type=refresh_token", {
+    method:"POST",
+    headers:{ "apikey":A.key, "Content-Type":"application/json" },
+    body: JSON.stringify({ refresh_token: A.refresh })
+  });
+  if (!res.ok) return false;
+  const b = await res.json();
+  A.token = b.access_token; A.refresh = b.refresh_token;
+  A.expires = Date.now() + (b.expires_in || 3600) * 1000;
+  return true;
+}
+
+/* An organiser leaves this open all day; the hour-long token must not
+   quietly expire behind a "Not authorised" that looks like a permissions bug. */
+async function ensureToken(){
+  if (A.expires && Date.now() > A.expires - 120000) await refreshToken();
+}
+
+/* ---------------------------------------------------------------- data */
+
+const D = { sessions:[], days:[], day:"", rows:[], totals:{} };
+
+const fmtDay = d => {
+  const dt = new Date(d + "T00:00:00");
+  return dt.toLocaleDateString([], { weekday:"short", day:"numeric", month:"short" });
+};
+const today = () => new Date().toISOString().slice(0,10);
+const nowMin = () => { const d = new Date(); return d.getHours()*60 + d.getMinutes(); };
+const toMin = t => { const [h,m] = String(t).split(":").map(Number); return h*60 + m; };
+
+async function loadSchedule(){
+  const [sessions, days] = await Promise.all([
+    rest("/sessions?select=id,name,venue,starts,ends&order=starts"),
+    rest("/session_days?select=session_id,day&order=day")
+  ]);
+  D.sessions = sessions;
+  D.days = [...new Set(days.map(d => d.day))].sort();
+  D.byDay = days.reduce((m, r) => ((m[r.day] = m[r.day] || []).push(r.session_id), m), {});
+}
+
+async function loadDay(day){
+  // count=exact with a zero-row range asks PostgREST for a count and no body,
+  // which is the cheap way to poll this every 20 seconds.
+  const counts = await rest(
+    `/attendance_by_session?select=session_id,present&day=eq.${day}`);
+  const present = Object.fromEntries(counts.map(c => [c.session_id, c.present]));
+
+  const [linked, issued, voided, scans] = await Promise.all([
+    head("/participants?select=code&void=is.false&pid=not.is.null"),
+    head("/participants?select=code"),
+    head("/participants?select=code&void=is.true"),
+    head(`/scans?select=uuid&day=eq.${day}`)
+  ]);
+
+  D.day = day;
+  D.totals = { linked, issued, voided, scans };
+  D.rows = (D.byDay[day] || [])
+    .map(id => D.sessions.find(s => s.id === id))
+    .filter(Boolean)
+    .sort((a,b) => toMin(a.starts) - toMin(b.starts))
+    .map(s => ({ ...s, present: present[s.id] || 0 }));
+}
+
+/* A count without transferring the rows. */
+async function head(path){
+  const res = await api("/rest/v1" + path, {
+    headers: { "Prefer":"count=exact", "Range":"0-0" }
+  });
+  if (!res.ok) return 0;
+  const cr = res.headers.get("content-range") || "";
+  return +(cr.split("/")[1] || 0) || 0;
+}
+
+/* ---------------------------------------------------------------- render */
+
+function render(){
+  $("tLinked").textContent = D.totals.linked.toLocaleString();
+  $("tScans").textContent  = D.totals.scans.toLocaleString();
+  $("tIssued").textContent = D.totals.issued.toLocaleString();
+  $("tVoid").textContent   = D.totals.voided.toLocaleString();
+
+  const body = $("sessBody");
+  body.innerHTML = "";
+  $("sessEmpty").style.display = D.rows.length ? "none" : "block";
+  $("sessTable").style.display = D.rows.length ? "" : "none";
+
+  const expected = D.totals.linked;
+  const isToday = D.day === today();
+  const m = nowMin();
+
+  for (const r of D.rows){
+    const pct = expected ? Math.min(100, Math.round(r.present / expected * 100)) : 0;
+    const live = isToday && m >= toMin(r.starts) - 20 && m <= toMin(r.ends) + 20;
+    const past = isToday ? m > toMin(r.ends) + 20 : D.day < today();
+
+    const tr = document.createElement("tr");
+    if (live) tr.className = "now";
+    tr.innerHTML = `
+      <td><b>${esc(r.name)}</b></td>
+      <td>${esc(r.venue)}</td>
+      <td class="mono">${String(r.starts).slice(0,5)}–${String(r.ends).slice(0,5)}</td>
+      <td class="num"><b>${r.present.toLocaleString()}</b></td>
+      <td class="num" style="color:var(--muted)">${expected.toLocaleString()}</td>
+      <td>
+        <div class="row" style="gap:8px;flex-wrap:nowrap">
+          <div class="bar-track" style="flex:1">
+            <div class="bar-fill ${pct >= 80 ? "high" : pct >= 40 ? "" : "low"}" style="width:${pct}%"></div>
+          </div>
+          <span class="note" style="min-width:38px;text-align:right">${pct}%</span>
+        </div>
+      </td>
+      <td>${live ? '<span class="tag live">live</span>'
+                 : past ? '<span class="tag done">done</span>'
+                        : '<span class="tag soon">upcoming</span>'}</td>`;
+    body.appendChild(tr);
+  }
+
+  const sel = $("absSess"), keep = sel.value;
+  sel.innerHTML = D.rows.map(r => `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.venue)}</option>`).join("");
+  if (keep && D.rows.some(r => r.id === keep)) sel.value = keep;
+}
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+function setLive(state, text){
+  $("liveDot").className = "dot" + (state === "ok" ? "" : state === "stale" ? " stale" : " off");
+  $("liveText").textContent = text;
+}
+
+async function tick(){
+  try{
+    await ensureToken();
+    await loadDay($("dayPick").value);
+    render();
+    setLive("ok", `updated ${new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})}`);
+  }catch(e){
+    setLive("off", e.message.slice(0, 90));
+  }
+}
+
+/* ---------------------------------------------------------------- export */
+
+function download(name, text){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type:"text/csv" }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+const cell = v => {
+  const s = String(v ?? "");
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const toCsv = (cols, rows) =>
+  cols.join(",") + "\n" + rows.map(r => cols.map(c => cell(r[c])).join(",")).join("\n") + "\n";
+
+/* PostgREST caps a response at its configured limit, so page explicitly
+   rather than silently exporting the first 1000 rows of a 10,000-row day. */
+async function fetchAll(path){
+  const out = [];
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE){
+    const res = await api("/rest/v1" + path, {
+      headers: { "Range-Unit":"items", "Range": `${from}-${from + PAGE - 1}` }
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=> "")}`);
+    const page = await res.json();
+    out.push(...page);
+    if (page.length < PAGE) break;
+  }
+  return out;
+}
+
+async function exportCsv(label, path, cols, filename){
+  const note = $("expNote");
+  note.textContent = `Fetching ${label}…`;
+  note.classList.remove("bad-text");
+  try{
+    await ensureToken();
+    const rows = await fetchAll(path);
+    download(filename, toCsv(cols, rows));
+    note.textContent = `${rows.length.toLocaleString()} rows exported.`;
+  }catch(e){
+    note.textContent = e.message;
+    note.classList.add("bad-text");
+  }
+}
+
+/* ---------------------------------------------------------------- wiring */
+
+$("loginBtn").addEventListener("click", async () => {
+  const err = $("loginErr");
+  err.textContent = "";
+  A.url = $("url").value.trim();
+  A.key = $("key").value.trim();
+  if (!A.url || !A.key) return err.textContent = "Project URL and key are both needed.";
+  $("loginBtn").disabled = true;
+  try{
+    await signIn($("email").value.trim(), $("pw").value);
+    localStorage.setItem(REMEMBER, JSON.stringify({ url:A.url, key:A.key, email:$("email").value.trim() }));
+    await start();
+  }catch(e){
+    err.textContent = e.message;
+  }finally{
+    $("loginBtn").disabled = false;
+  }
+});
+
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
+
+$("outBtn").addEventListener("click", () => {
+  clearInterval(poller);
+  A.token = A.refresh = ""; A.expires = 0;
+  $("pw").value = "";
+  $("s-dash").classList.remove("on");
+  $("s-login").classList.add("on");
+});
+
+$("dayPick").addEventListener("change", tick);
+$("refreshBtn").addEventListener("click", tick);
+
+$("expScans").addEventListener("click", () => exportCsv(
+  "scans",
+  `/scans?select=code,session_id,session_name,venue,scanned_at,day,volunteer,device,source&day=eq.${D.day}&order=scanned_at`,
+  ["code","session_id","session_name","venue","scanned_at","day","volunteer","device","source"],
+  `scans-${D.day}.csv`));
+
+$("expLinks").addEventListener("click", () => exportCsv(
+  "badge links",
+  "/badge_links?select=code,pid,name,replaces,linked_at,volunteer,device&order=linked_at",
+  ["code","pid","name","replaces","linked_at","volunteer","device"],
+  "badge-links.csv"));
+
+$("expRoll").addEventListener("click", () => exportCsv(
+  "the roll",
+  "/participants?select=code,serial,name,pid,void,linked_at&order=serial",
+  ["code","serial","name","pid","void","linked_at"],
+  "participants.csv"));
+
+$("absBtn").addEventListener("click", async () => {
+  const note = $("absNote"), sess = $("absSess").value;
+  if (!sess) return;
+  note.textContent = "Working…"; note.classList.remove("bad-text");
+  $("absCsv").disabled = true;
+  try{
+    await ensureToken();
+    const res = await api(`/rest/v1/rpc/absentees`, {
+      method:"POST",
+      body: JSON.stringify({ p_session: sess, p_day: D.day })
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=> "")}`);
+    absRows = await res.json();
+    const body = $("absBody");
+    body.innerHTML = absRows.slice(0, 500).map(r =>
+      `<tr><td>${esc(r.name || "—")}</td><td>${esc(r.pid || "—")}</td>
+           <td class="mono">${esc((r.code||"").slice(0,4) + "-" + (r.code||"").slice(4))}</td></tr>`).join("");
+    $("absTable").style.display = absRows.length ? "" : "none";
+    note.textContent = absRows.length
+      ? `${absRows.length.toLocaleString()} missing${absRows.length > 500 ? " — showing the first 500" : ""}.`
+      : "Nobody missing.";
+    $("absCsv").disabled = !absRows.length;
+  }catch(e){
+    note.textContent = e.message; note.classList.add("bad-text");
+  }
+});
+
+$("absCsv").addEventListener("click", () => download(
+  `absentees-${$("absSess").value}-${D.day}.csv`,
+  toCsv(["code","pid","name"], absRows)));
+
+/* ---------------------------------------------------------------- boot */
+
+async function start(){
+  $("s-login").classList.remove("on");
+  $("s-dash").classList.add("on");
+  setLive("stale", "loading…");
+  await loadSchedule();
+
+  const sel = $("dayPick");
+  const days = D.days.length ? D.days : [today()];
+  sel.innerHTML = days.map((d, i) =>
+    `<option value="${d}">Day ${i + 1} · ${fmtDay(d)}</option>`).join("");
+  sel.value = days.includes(today()) ? today() : days[0];
+
+  await tick();
+  clearInterval(poller);
+  poller = setInterval(tick, POLL);
+}
+
+(function boot(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(REMEMBER) || "{}");
+    if (saved.url)   $("url").value = saved.url;
+    if (saved.key)   $("key").value = saved.key;
+    if (saved.email) $("email").value = saved.email;
+  }catch(e){}
+  ($("email").value ? $("pw") : $("url")).focus();
+})();
+</script>
+</body>
+</html>

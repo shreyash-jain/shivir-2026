@@ -1,0 +1,29 @@
+# The master code list is what makes a badge valid. Anyone holding it can
+# forge one, so it never goes in version control.
+codes_master.csv
+scanner/codes.csv
+*.pdf
+out/
+labels/
+tests/fixtures/*.y4m
+tests/fixtures/*.png
+__pycache__/
+node_modules/
+.env
+.env.local
+.pytest_cache/
+
+# Android shell. The generated native project IS committed (app/android), but
+# its build output and machine-specific paths are not.
+app/node_modules/
+app/android/build/
+app/android/app/build/
+app/android/.gradle/
+app/android/local.properties
+app/android/app/src/main/assets/public/
+app/android/app/src/main/assets/capacitor.config.json
+*.apk
+*.aab
+*.keystore
+*.jks
+dist/

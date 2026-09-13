@@ -1,0 +1,62 @@
+name: Deploy
+
+# The scanner is static files, so "deploy" is a copy. The tests run first
+# anyway: the checksum cross-validation is the one that matters, because a
+# Python/JavaScript disagreement means every badge at the event fails to
+# scan and no amount of redeploying fixes it afterwards.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r tests/requirements.txt -r tools/requirements.txt
+          python -m playwright install --with-deps chromium
+          sudo apt-get install -y poppler-utils   # pdftoppm, for rendering the QR fixtures
+
+      - name: Generator tests
+        run: python -m pytest tests/test_codes.py -v
+
+      - name: Python and JavaScript agree on the check character
+        run: node tests/crossvalidate.js
+
+      - name: Browser tests
+        run: xvfb-run -a python -m pytest tests/test_scanner.py tests/test_pairing.py tests/test_sync.py -v
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the site
+        run: sh tools/build_site.sh dist
+
+      # Needs two repository secrets:
+      #   CLOUDFLARE_API_TOKEN  - a token with the "Cloudflare Pages: Edit" permission
+      #   CLOUDFLARE_ACCOUNT_ID - from the Cloudflare dashboard sidebar
+      - name: Publish to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=shivir-attendance --branch=main

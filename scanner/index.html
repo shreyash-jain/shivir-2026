@@ -1,0 +1,1093 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0E1A24">
+<title>Attendance Scanner</title>
+<link rel="manifest" href="./manifest.json">
+<style>
+:root{
+  --ink:#0E1A24; --surface:#16242F; --raised:#1F3140; --line:#2C4152;
+  --text:#F2F5F7; --muted:#8FA3B0;
+  --ok:#2FBF71; --warn:#F2A73B; --bad:#E5484D; --accent:#58B8E8;
+  --tap:56px;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{
+  background:var(--ink); color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:16px; line-height:1.45; overscroll-behavior:none;
+}
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:.06em}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+input,select{
+  font:inherit;color:var(--text);background:var(--surface);
+  border:1px solid var(--line);border-radius:10px;padding:12px 14px;width:100%;
+}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.screen{display:none;height:100dvh;flex-direction:column}
+.screen.on{display:flex}
+
+/* ---------- setup / config ---------- */
+.pad{padding:22px 20px;overflow-y:auto;flex:1}
+h1{font-size:26px;font-weight:650;letter-spacing:-.02em;margin:0 0 6px}
+h2{font-size:17px;font-weight:600;margin:26px 0 10px}
+.sub{color:var(--muted);margin:0 0 22px}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+.btn{
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  min-height:var(--tap);border-radius:12px;background:var(--accent);color:#06131C;
+  font-weight:650;width:100%;padding:0 18px;
+}
+.btn.sec{background:var(--raised);color:var(--text);border:1px solid var(--line)}
+.btn[disabled]{opacity:.4}
+.row{display:flex;gap:10px}
+.note{font-size:13px;color:var(--muted);margin-top:10px}
+.bad-text{color:var(--bad)}
+
+.sess{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:var(--surface)}
+.sess .top{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.sess .top input{flex:1}
+.sess .times{display:flex;gap:8px;align-items:center}
+.sess .times input{flex:1}
+.x{width:40px;min-width:40px;height:40px;border-radius:10px;background:var(--raised);color:var(--muted);font-size:20px}
+
+/* ---------- station picker ---------- */
+.station{
+  display:block;width:100%;text-align:left;background:var(--surface);
+  border:1px solid var(--line);border-left:4px solid var(--accent);
+  border-radius:12px;padding:16px;margin-bottom:10px;
+}
+.station b{display:block;font-size:19px;font-weight:640}
+.station span{color:var(--muted);font-size:14px}
+.station.idle{border-left-color:var(--line);opacity:.55}
+
+/* ---------- scanner ---------- */
+.bar{
+  display:flex;align-items:center;gap:12px;padding:12px 16px;
+  background:var(--surface);border-bottom:1px solid var(--line);
+}
+.bar .who{flex:1;min-width:0}
+.bar .who b{display:block;font-size:16px;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar .who span{font-size:12.5px;color:var(--muted)}
+.count{font-size:22px;font-weight:680;font-variant-numeric:tabular-nums}
+.iconbtn{width:44px;height:44px;border-radius:11px;background:var(--raised);font-size:19px}
+
+.view{position:relative;flex:1;background:#000;overflow:hidden}
+video{width:100%;height:100%;object-fit:cover;display:block}
+.reticle{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none
+}
+.reticle i{
+  width:min(64vw,260px);aspect-ratio:1;border-radius:20px;
+  box-shadow:0 0 0 100vmax rgba(6,15,22,.55);border:2px solid rgba(242,245,247,.5)
+}
+
+/* the whole screen is the verdict */
+.flash{
+  position:absolute;inset:0;display:none;flex-direction:column;
+  align-items:center;justify-content:center;text-align:center;padding:24px;
+}
+.flash.on{display:flex}
+.flash.ok{background:var(--ok);color:#062615}
+.flash.warn{background:var(--warn);color:#3A2405}
+.flash.bad{background:var(--bad);color:#fff}
+.flash .mark{font-size:68px;line-height:1;margin-bottom:10px}
+.flash .who{font-size:clamp(26px,8vw,44px);font-weight:700;letter-spacing:-.02em;line-height:1.1}
+.flash .detail{font-size:17px;margin-top:8px;opacity:.85}
+.flash .code{font-size:15px;margin-top:14px;opacity:.7}
+
+.pairPanel{display:none;background:var(--surface);border-top:1px solid var(--line);padding:14px 16px}
+.pairPanel.on{display:block}
+.slot{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--line);
+  border-radius:11px;margin-bottom:8px;background:var(--raised)}
+.slot.done{border-color:var(--ok)}
+.slot .n{width:26px;height:26px;min-width:26px;border-radius:50%;background:var(--ink);
+  display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--muted)}
+.slot.done .n{background:var(--ok);color:#062615}
+.slot .t{flex:1;min-width:0}
+.slot .t b{display:block;font-size:15px;font-weight:620;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot .t span{font-size:12.5px;color:var(--muted)}
+.foot{display:flex;gap:10px;padding:12px 16px;background:var(--surface);border-top:1px solid var(--line)}
+.foot .btn{flex:1}
+
+.sheet{
+  position:fixed;inset:0;background:rgba(6,15,22,.75);display:none;
+  align-items:flex-end;z-index:20
+}
+.sheet.on{display:flex}
+.sheet .panel{
+  background:var(--ink);width:100%;max-height:88dvh;overflow-y:auto;
+  border-radius:18px 18px 0 0;padding:20px;border-top:1px solid var(--line)
+}
+.grab{width:38px;height:4px;border-radius:2px;background:var(--line);margin:0 auto 16px}
+
+.stat{display:flex;justify-content:space-between;padding:11px 0;border-bottom:1px solid var(--line)}
+.stat:last-child{border-bottom:0}
+.stat span{color:var(--muted)}
+.stat b{font-variant-numeric:tabular-nums;font-weight:620}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12.5px;font-weight:600}
+.pill.q{background:rgba(242,167,59,.18);color:var(--warn)}
+.pill.s{background:rgba(47,191,113,.18);color:var(--ok)}
+.log{max-height:44dvh;overflow-y:auto;margin-top:8px}
+.log div{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line);font-size:14.5px}
+.log em{font-style:normal;color:var(--muted);font-size:13px}
+@media (prefers-reduced-motion:no-preference){
+  .flash.on{animation:pop .12s ease-out}
+  @keyframes pop{from{opacity:.4}to{opacity:1}}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ SETUP ============ -->
+<section id="s-setup" class="screen on">
+  <div class="pad">
+    <h1>Set up this phone</h1>
+    <p class="sub">Do this once, on wifi. After that the app works with no signal.</p>
+
+    <div class="field">
+      <label for="vol">Your name</label>
+      <input id="vol" placeholder="e.g. Anjali" autocomplete="name">
+    </div>
+
+    <h2>Participant list</h2>
+    <p class="note" id="codeState">Looking for codes.csv…</p>
+    <div class="row" style="margin-top:10px">
+      <button class="btn sec" id="pickCsv">Choose codes.csv</button>
+    </div>
+    <input type="file" id="csvFile" accept=".csv,text/csv" hidden>
+
+    <h2>Sessions</h2>
+    <p class="note" style="margin-bottom:12px">A scan counts toward whichever session is running at that venue when it happens.</p>
+    <div id="sessList"></div>
+    <button class="btn sec" id="addSess">Add a session</button>
+
+    <h2>Sync</h2>
+    <p class="note" style="margin-bottom:12px">Leave both blank to export by file instead. Scanning works either way — nothing here is needed to record attendance.</p>
+    <div class="field">
+      <label for="supaUrl">Project URL</label>
+      <input id="supaUrl" placeholder="https://xxxx.supabase.co" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="supaKey">Publishable key</label>
+      <input id="supaKey" placeholder="sb_publishable_…" autocapitalize="off" autocomplete="off" spellcheck="false">
+    </div>
+
+    <div style="height:18px"></div>
+    <button class="btn" id="startBtn" disabled>Start scanning</button>
+    <p class="note" id="setupWarn"></p>
+    <button class="btn sec" id="shareCfg" style="margin-top:10px">Copy setup for other phones</button>
+    <button class="btn sec" id="pasteCfg" style="margin-top:8px">Paste setup from another phone</button>
+    <p class="note" id="cfgState"></p>
+  </div>
+</section>
+
+<!-- ============ STATION ============ -->
+<section id="s-station" class="screen">
+  <div class="bar">
+    <div class="who"><b>Pick your station</b><span id="stationClock"></span></div>
+    <button class="iconbtn" id="backSetup" aria-label="Settings">⚙</button>
+  </div>
+  <div class="pad" id="stationList"></div>
+</section>
+
+<!-- ============ SCAN ============ -->
+<section id="s-scan" class="screen">
+  <div class="bar">
+    <button class="iconbtn" id="leaveStation" aria-label="Change station">‹</button>
+    <div class="who"><b id="sessName">—</b><span id="sessMeta">—</span></div>
+    <div class="count" id="sessCount">0</div>
+    <button class="iconbtn" id="openReview" aria-label="Review">≡</button>
+  </div>
+  <div class="view">
+    <video id="cam" playsinline muted></video>
+    <div class="reticle"><i></i></div>
+    <div class="flash" id="flash">
+      <div class="mark" id="fMark"></div>
+      <div class="who" id="fWho"></div>
+      <div class="detail" id="fDetail"></div>
+      <div class="code mono" id="fCode"></div>
+    </div>
+  </div>
+  <div class="pairPanel" id="pairPanel">
+    <div class="slot" id="slotBadge">
+      <div class="n">1</div><div class="t"><b>Scan the badge</b><span>The QR on their ID card</span></div>
+    </div>
+    <div class="slot" id="slotPid">
+      <div class="n">2</div><div class="t"><b>Scan or type their participant ID</b><span>From the registration list</span></div>
+    </div>
+    <input id="pairName" placeholder="Participant name" style="margin-bottom:10px;display:none">
+    <div class="row">
+      <button class="btn sec" id="pairClear" style="flex:1">Clear</button>
+      <button class="btn" id="pairSave" style="flex:2" disabled>Link badge</button>
+    </div>
+  </div>
+  <div class="foot">
+    <button class="btn sec" id="typeBtn">Type a code</button>
+  </div>
+</section>
+
+<!-- ============ SHEETS ============ -->
+<div class="sheet" id="typeSheet">
+  <div class="panel">
+    <div class="grab"></div>
+    <h2 style="margin-top:0">Type the code on the badge</h2>
+    <input id="typeIn" class="mono" placeholder="A287-3PBF" autocapitalize="characters" autocomplete="off" spellcheck="false" style="font-size:24px;text-align:center">
+    <p class="note" id="typeHint">The last character checks the rest, so a typo is caught here.</p>
+    <div style="height:12px"></div>
+    <button class="btn" id="typeGo">Record attendance</button>
+    <div style="height:8px"></div>
+    <button class="btn sec" id="typeClose">Cancel</button>
+  </div>
+</div>
+
+<div class="sheet" id="reviewSheet">
+  <div class="panel">
+    <div class="grab"></div>
+    <h2 style="margin-top:0">This session</h2>
+    <div class="stat"><span>Recorded here</span><b id="rCount">0</b></div>
+    <div class="stat"><span>Waiting to send</span><b id="rQueue"><span class="pill q">0</span></b></div>
+    <div class="stat"><span>Sent</span><b id="rSent"><span class="pill s">0</span></b></div>
+    <p class="note" id="syncState" style="margin:10px 0 0"></p>
+    <div style="height:14px"></div>
+    <button class="btn" id="syncNow">Send now</button>
+    <div style="height:8px"></div>
+    <button class="btn sec" id="exportBtn">Export attendance CSV</button>
+    <div style="height:8px"></div>
+    <button class="btn sec" id="exportLinks">Export badge links CSV</button>
+    <h2>Recent</h2>
+    <div class="log" id="rLog"></div>
+    <div style="height:14px"></div>
+    <button class="btn sec" id="reviewClose">Close</button>
+  </div>
+</div>
+
+<script src="./jsQR.min.js"></script>
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ * Codes — must stay identical to make_qr_labels.py
+ * ------------------------------------------------------------------ */
+const ALPHABET = "23456789ABCDEFGHJKMNPQRSTVWXYZ";
+const BODY = 7, LEN = 8;
+
+function checkChar(body){
+  let t = 0;
+  for (let i = 0; i < body.length; i++) t += ALPHABET.indexOf(body[i]) * (i + 2);
+  return ALPHABET[t % ALPHABET.length];
+}
+function normalise(raw){
+  return String(raw || "").trim().toUpperCase().replace(/[^0-9A-Z]/g, "");
+}
+function validCode(raw){
+  const c = normalise(raw);
+  if (c.length !== LEN) return false;
+  for (const ch of c) if (!ALPHABET.includes(ch)) return false;
+  return checkChar(c.slice(0, BODY)) === c[BODY];
+}
+const pretty = c => c.slice(0,4) + "-" + c.slice(4);
+
+/* ------------------------------------------------------------------ *
+ * Storage
+ * ------------------------------------------------------------------ */
+const DB = { h:null };
+function openDb(){
+  return new Promise((res, rej) => {
+    const r = indexedDB.open("attendance", 2);
+    r.onupgradeneeded = e => {
+      const db = e.target.result, old = e.oldVersion;
+      if (old < 1){
+        db.createObjectStore("people", { keyPath:"code" });
+        const sc = db.createObjectStore("scans", { keyPath:"uuid" });
+        sc.createIndex("dedupe", "dedupe", { unique:false });
+        sc.createIndex("sent", "sent", { unique:false });
+        db.createObjectStore("meta", { keyPath:"k" });
+      }
+      if (old < 2){
+        const ppl = r.transaction.objectStore("people");
+        if (!ppl.indexNames.contains("pid")) ppl.createIndex("pid", "pid", { unique:false });
+        const lk = db.createObjectStore("links", { keyPath:"uuid" });
+        lk.createIndex("sent", "sent", { unique:false });
+      }
+    };
+    r.onsuccess = e => { DB.h = e.target.result; res(); };
+    r.onerror = () => rej(r.error);
+  });
+}
+function tx(store, mode, fn){
+  return new Promise((res, rej) => {
+    const t = DB.h.transaction(store, mode);
+    const req = fn(t.objectStore(store));
+    let value;                       // stays undefined when nothing is found,
+    if (req) req.onsuccess = () => { value = req.result; };   // which the
+    t.oncomplete = () => res(value); // callers rely on to reject unknown badges
+    t.onerror = () => rej(t.error);
+  });
+}
+const getMeta = async k => (await tx("meta","readonly", s => s.get(k)))?.v ?? null;
+const setMeta = (k,v) => tx("meta","readwrite", s => s.put({k,v}));
+const getPerson = code => tx("people","readonly", s => s.get(code));
+const allLinks  = () => tx("links","readonly", s => s.getAll());
+async function findByPid(pid){
+  if (!pid) return null;
+  const rows = await tx("people","readonly", s => s.index("pid").getAll(pid));
+  return rows.find(r => !r.void) || null;
+}
+const countPeople = () => tx("people","readonly", s => s.count());
+const allScans = () => tx("scans","readonly", s => s.getAll());
+
+/* Loading a fresh roll replaces the printed list, but a registration phone
+   may already hold pairings that have not synced yet. Clearing the store
+   outright would drop them on the floor and mark linked badges unlinked, so
+   anything this phone linked itself wins over the incoming row. The `links`
+   store keeps the events regardless; this keeps `people` agreeing with it. */
+async function putPeople(rows){
+  const existing = await tx("people","readonly", s => s.getAll());
+  const linked = new Map(existing.filter(p => p.linkedAt).map(p => [p.code, p]));
+  return new Promise((res, rej) => {
+    const t = DB.h.transaction("people","readwrite");
+    const st = t.objectStore("people");
+    st.clear();
+    for (const r of rows){
+      const mine = linked.get(r.code);
+      st.put(mine ? { ...r, pid:mine.pid, name:mine.name || r.name,
+                      void:mine.void, linkedAt:mine.linkedAt } : r);
+      linked.delete(r.code);
+    }
+    // A badge this phone linked that is missing from the new list would
+    // otherwise vanish and its queued link would fail its foreign key.
+    for (const mine of linked.values()) st.put(mine);
+    t.oncomplete = res; t.onerror = () => rej(t.error);
+  });
+}
+async function seenAlready(dedupe){
+  const rows = await tx("scans","readonly", s => s.index("dedupe").getAll(dedupe));
+  return rows[0] || null;
+}
+
+/* ------------------------------------------------------------------ *
+ * State
+ * ------------------------------------------------------------------ */
+const S = {
+  volunteer:"", device:"", supaUrl:"", supaKey:"", sessions:[],
+  station:null, session:null, count:0, people:0,
+  cooldown:new Map(), busy:false, stream:null, loop:null, detector:null,
+  mode:"attend", pair:{ code:null, pid:null, name:"", known:null }
+};
+
+const DEFAULT_SESSIONS = [
+  { id:"pray-am",   name:"Morning prayer", venue:"Prayer hall",  start:"06:00", end:"08:00" },
+  { id:"breakfast", name:"Breakfast",      venue:"Dining hall",  start:"08:00", end:"09:30" },
+  { id:"session-1", name:"Morning session",venue:"Main hall",    start:"09:30", end:"12:30" },
+  { id:"lunch",     name:"Lunch",          venue:"Dining hall",  start:"12:30", end:"14:00" },
+  { id:"session-2", name:"Evening session",venue:"Main hall",    start:"16:00", end:"18:30" },
+  { id:"dinner",    name:"Dinner",         venue:"Dining hall",  start:"19:30", end:"21:00" },
+  { id:"lights",    name:"Night check-in", venue:"Dormitory",    start:"22:00", end:"23:30" }
+];
+
+const GRACE = 20;                       // minutes either side of a session window
+const toMin = t => { const [h,m] = t.split(":").map(Number); return h*60 + m; };
+const nowMin = () => { const d = new Date(); return d.getHours()*60 + d.getMinutes(); };
+const today = () => new Date().toISOString().slice(0,10);
+const $ = id => document.getElementById(id);
+
+function venues(){ return [...new Set(S.sessions.map(s => s.venue))]; }
+function activeAt(venue, m = nowMin()){
+  const here = S.sessions.filter(s => s.venue === venue);
+  return here.find(s => m >= toMin(s.start) - GRACE && m <= toMin(s.end) + GRACE) || null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Feedback — sound and vibration, so a volunteer needn't look
+ * ------------------------------------------------------------------ */
+let audio = null;
+function beep(freq, ms, vol = 0.09){
+  try{
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === "suspended") audio.resume();
+    const o = audio.createOscillator(), g = audio.createGain();
+    o.type = "square"; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, audio.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + ms/1000);
+    o.connect(g).connect(audio.destination);
+    o.start(); o.stop(audio.currentTime + ms/1000);
+  }catch(e){}
+}
+const buzz = p => { try{ navigator.vibrate && navigator.vibrate(p); }catch(e){} };
+
+function signal(kind){
+  if (kind === "ok")        { beep(1180, 90);  buzz(35); }
+  else if (kind === "warn") { beep(720, 150);  buzz([25,60,25]); }
+  else                      { beep(280, 320, .12); buzz([70,70,70]); }
+}
+
+/* ------------------------------------------------------------------ *
+ * Recording a scan
+ * ------------------------------------------------------------------ */
+async function record(raw, source){
+  const code = normalise(raw);
+  const last = S.cooldown.get(code) || 0;
+  if (Date.now() - last < 2500) return null;
+  S.cooldown.set(code, Date.now());
+
+  if (!validCode(code)) return show("bad","✕","Not a valid badge","Check the code and try again", code || "—");
+
+  const person = await getPerson(code);
+  if (!person) return show("bad","✕","Badge not recognised","This code isn't on the participant list", pretty(code));
+  if (person.void) return show("bad","✕","Badge was replaced","A new badge was issued — use that one", pretty(code));
+  if (!person.pid) return show("warn","?","Badge not linked yet","Send them to registration to link it", pretty(code));
+
+  const dedupe = `${code}|${S.session.id}|${today()}`;
+  const prior = await seenAlready(dedupe);
+  if (prior){
+    const t = new Date(prior.at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+    return show("warn","•", person.name || `#${person.serial}`, `Already recorded at ${t}`, pretty(code));
+  }
+
+  const scan = {
+    uuid: crypto.randomUUID(),
+    dedupe, code,
+    sessionId: S.session.id, sessionName: S.session.name, venue: S.session.venue,
+    pid: person.pid, name: person.name,
+    at: new Date().toISOString(), day: today(),
+    volunteer: S.volunteer, device: S.device, source, sent: 0
+  };
+  await tx("scans","readwrite", s => s.put(scan));
+
+  S.count++; $("sessCount").textContent = S.count;
+  show("ok","✓", person.name || person.pid, `${person.pid} · ${S.session.name}`, pretty(code));
+  sync();
+  return scan;
+}
+
+async function onScan(raw, source){
+  if (S.mode === "pair") return pairScan(raw);
+  return record(raw, source);
+}
+
+/* ------------------------------------------------------------------ *
+ * Pairing — link a spare badge to a participant ID
+ * ------------------------------------------------------------------ */
+async function pairScan(raw){
+  const asCode = normalise(raw);
+  const last = S.cooldown.get(raw) || 0;
+  if (Date.now() - last < 1800) return;
+  S.cooldown.set(raw, Date.now());
+
+  if (validCode(asCode)){
+    const person = await getPerson(asCode);
+    if (!person) return show("bad","✕","Badge not recognised","This code isn't on the printed list", pretty(asCode));
+    if (person.void) return show("bad","✕","Badge was replaced","That badge is void — use a fresh one", pretty(asCode));
+    if (person.pid && person.pid !== S.pair.pid)
+      return show("bad","✕","Badge already in use", `Linked to ${person.name || person.pid}`, pretty(asCode));
+    S.pair.code = asCode;
+    signal("ok");
+  } else {
+    await setPid(String(raw).trim());
+  }
+  renderPair();
+}
+
+async function setPid(pid){
+  if (!pid) return;
+  S.pair.pid = pid;
+  const known = await findByPid(pid);
+  S.pair.known = known;
+  if (known && known.name) S.pair.name = known.name;
+  signal(known ? "warn" : "ok");
+}
+
+function renderPair(){
+  const b = $("slotBadge"), p = $("slotPid");
+  b.className = "slot" + (S.pair.code ? " done" : "");
+  b.querySelector("b").textContent = S.pair.code ? pretty(S.pair.code) : "Scan the badge";
+  b.querySelector("span").textContent = S.pair.code ? "Badge ready to link" : "The QR on their ID card";
+
+  p.className = "slot" + (S.pair.pid ? " done" : "");
+  p.querySelector("b").textContent = S.pair.pid || "Scan or type their participant ID";
+  p.querySelector("span").textContent = !S.pair.pid ? "From the registration list"
+    : S.pair.known && S.pair.known.code !== S.pair.code
+      ? `Already holds badge ${pretty(S.pair.known.code)} — saving will void it`
+      : (S.pair.name || "Not on the list — type their name below");
+
+  const needName = !!S.pair.pid && !S.pair.name;
+  const el = $("pairName");
+  el.style.display = needName ? "block" : "none";
+  if (!needName) el.value = S.pair.name || "";
+  $("pairSave").disabled = !(S.pair.code && S.pair.pid);
+  $("pairSave").textContent = S.pair.known && S.pair.known.code !== S.pair.code
+    ? "Replace their badge" : "Link badge";
+}
+
+function clearPair(){ S.pair = { code:null, pid:null, name:"", known:null }; $("pairName").value=""; renderPair(); }
+
+async function savePair(){
+  const { code, pid, known } = S.pair;
+  if (!code || !pid) return;
+  const name = ($("pairName").value.trim() || S.pair.name || "").trim();
+  const person = await getPerson(code);
+  if (!person) return show("bad","✕","Badge not recognised","","");
+
+  const replaces = known && known.code !== code ? known.code : null;
+  if (replaces){
+    known.void = true;
+    await tx("people","readwrite", st => st.put(known));
+  }
+  // An empty name box must not erase a name the printed roll already had.
+  person.pid = pid; person.name = name || person.name || "";
+  person.void = false;
+  person.linkedAt = new Date().toISOString();
+  await tx("people","readwrite", st => st.put(person));
+
+  await tx("links","readwrite", st => st.put({
+    uuid: crypto.randomUUID(), code, pid, name: person.name, replaces,
+    at: person.linkedAt, volunteer: S.volunteer, device: S.device, sent: 0
+  }));
+
+  S.count++; $("sessCount").textContent = S.count;
+  show("ok","✓", person.name || pid, replaces ? `Replaced ${pretty(replaces)}` : `Linked to ${pretty(code)}`, pid);
+  clearPair();
+  sync();
+}
+
+let flashTimer = null;
+function show(kind, mark, who, detail, code){
+  const f = $("flash");
+  f.className = "flash on " + kind;
+  $("fMark").textContent = mark;
+  $("fWho").textContent = who;
+  $("fDetail").textContent = detail;
+  $("fCode").textContent = code;
+  signal(kind);
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { f.className = "flash"; }, kind === "ok" ? 850 : 1500);
+  return kind;
+}
+
+/* ------------------------------------------------------------------ *
+ * Camera
+ * ------------------------------------------------------------------ */
+const canvas = document.createElement("canvas");
+const ctx = canvas.getContext("2d", { willReadFrequently:true });
+
+async function startCamera(){
+  const video = $("cam");
+  try{
+    S.stream = await navigator.mediaDevices.getUserMedia({
+      video:{ facingMode:{ ideal:"environment" }, width:{ideal:1280}, height:{ideal:720} },
+      audio:false
+    });
+  }catch(e){
+    show("bad","✕","No camera access","Allow the camera, then reopen this station","");
+    return;
+  }
+  video.srcObject = S.stream;
+  await video.play();
+
+  if ("BarcodeDetector" in window){
+    try{ S.detector = new BarcodeDetector({ formats:["qr_code"] }); }catch(e){ S.detector = null; }
+  }
+  tick();
+}
+
+function stopCamera(){
+  cancelAnimationFrame(S.loop);
+  if (S.stream) S.stream.getTracks().forEach(t => t.stop());
+  S.stream = null;
+}
+
+async function tick(){
+  const video = $("cam");
+  if (video.readyState === video.HAVE_ENOUGH_DATA && !S.busy){
+    S.busy = true;
+    try{
+      let found = null;
+      if (S.detector){
+        const hits = await S.detector.detect(video);
+        if (hits.length) found = hits[0].rawValue;
+      } else {
+        const w = 480, h = Math.round(video.videoHeight / video.videoWidth * w);
+        canvas.width = w; canvas.height = h;
+        ctx.drawImage(video, 0, 0, w, h);
+        const img = ctx.getImageData(0, 0, w, h);
+        const r = jsQR(img.data, w, h, { inversionAttempts:"dontInvert" });
+        if (r) found = r.data;
+      }
+      if (found) await onScan(found, "camera");
+    }catch(e){}
+    S.busy = false;
+  }
+  S.loop = requestAnimationFrame(tick);
+}
+
+/* ------------------------------------------------------------------ *
+ * Sync — queue locally, send whenever the network allows
+ *
+ * Nothing here is on the path to a verdict. A scan is confirmed from
+ * IndexedDB the moment it is written; this runs afterwards and may fail all
+ * day without a volunteer noticing anything but the queue counter.
+ * ------------------------------------------------------------------ */
+const BATCH = 200;        // rows per request; small enough to survive a weak signal
+const TIMEOUT = 12000;    // a hung fetch on a dead network would block the queue forever
+
+/* PostgREST wants bare column names, not the shape we keep on the phone. */
+function scanRow(s){
+  return {
+    uuid:         s.uuid,
+    dedupe:       s.dedupe,
+    code:         s.code,
+    session_id:   s.sessionId,
+    session_name: s.sessionName,
+    venue:        s.venue,
+    scanned_at:   s.at,
+    day:          s.day,
+    volunteer:    s.volunteer,
+    device:       s.device,
+    source:       s.source
+  };
+}
+
+function linkRow(l){
+  return {
+    uuid:      l.uuid,
+    code:      l.code,
+    pid:       l.pid,
+    name:      l.name,
+    replaces:  l.replaces,
+    linked_at: l.at,
+    volunteer: l.volunteer,
+    device:    l.device
+  };
+}
+
+async function postBatch(table, rows){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), TIMEOUT);
+  try{
+    const res = await fetch(S.supaUrl.replace(/\/+$/,"") + "/rest/v1/" + table, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": S.supaKey,
+        "Authorization": "Bearer " + S.supaKey,
+        // A retry after a dropped response must be a no-op, not an error.
+        // The phone cannot tell "never arrived" from "reply never came back".
+        "Prefer": "resolution=ignore-duplicates,return=minimal"
+      },
+      body: JSON.stringify(rows)
+    });
+    if (res.ok) return { ok:true };
+
+    // 4xx means these rows will never be accepted — retrying forever would
+    // wedge the queue behind them, so surface it instead of looping.
+    const permanent = res.status >= 400 && res.status < 500 && res.status !== 429;
+    return { ok:false, permanent, status:res.status, detail: await res.text().catch(()=> "") };
+  }catch(e){
+    return { ok:false, permanent:false, detail:String(e) };   // offline or timed out
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+let syncing = false;
+let lastSyncError = "";
+
+/* Push one store's backlog. Stops at the first failure so that rows keep
+   their order and the next tick picks up where this one left off. */
+async function drain(table, rows, store, toRow){
+  for (let i = 0; i < rows.length; i += BATCH){
+    const chunk = rows.slice(i, i + BATCH);
+    const r = await postBatch(table, chunk.map(toRow));
+    if (!r.ok){
+      lastSyncError = r.permanent
+        ? `Server rejected ${chunk.length} records (${r.status}). They are still saved on this phone.`
+        : "No connection. Everything is saved and will send later.";
+      return false;
+    }
+    for (const x of chunk){ x.sent = 1; await tx(store,"readwrite", st => st.put(x)); }
+  }
+  return true;
+}
+
+async function sync(){
+  if (syncing || !S.supaUrl || !S.supaKey || !navigator.onLine) return;
+  syncing = true;
+  try{
+    // Links first: a scan is only meaningful once the badge behind it has a
+    // participant, and the trigger that applies a link is happier when the
+    // pairing lands before the attendance that depends on it.
+    const links = (await allLinks()).filter(l => !l.sent);
+    const scans = (await allScans()).filter(s => !s.sent);
+    let ok = true;
+    if (links.length) ok = await drain("badge_links", links, "links", linkRow);
+    if (ok && scans.length) ok = await drain("scans", scans, "scans", scanRow);
+    if (ok) lastSyncError = "";
+  }catch(e){
+    lastSyncError = "Sync failed. Everything is safe on this phone.";
+  }
+  syncing = false;
+  refreshReview();
+}
+
+window.addEventListener("online", sync);
+setInterval(sync, 25000);
+
+/* ------------------------------------------------------------------ *
+ * Setup screen
+ * ------------------------------------------------------------------ */
+function drawSessions(){
+  const box = $("sessList");
+  box.innerHTML = "";
+  S.sessions.forEach((s, i) => {
+    const el = document.createElement("div");
+    el.className = "sess";
+    el.innerHTML = `
+      <div class="top">
+        <input value="${s.name}" data-k="name" placeholder="Session name">
+        <button class="x" data-del aria-label="Remove">×</button>
+      </div>
+      <div class="times">
+        <input value="${s.venue}" data-k="venue" placeholder="Venue">
+        <input type="time" value="${s.start}" data-k="start">
+        <input type="time" value="${s.end}" data-k="end">
+      </div>`;
+    el.querySelectorAll("[data-k]").forEach(inp => {
+      inp.addEventListener("change", () => { S.sessions[i][inp.dataset.k] = inp.value; persistCfg(); });
+    });
+    el.querySelector("[data-del]").addEventListener("click", () => {
+      S.sessions.splice(i,1); drawSessions(); persistCfg();
+    });
+    box.appendChild(el);
+  });
+}
+
+function persistCfg(){
+  setMeta("cfg", { sessions:S.sessions, supaUrl:S.supaUrl, supaKey:S.supaKey, volunteer:S.volunteer });
+}
+
+function checkReady(){
+  const ok = S.people > 0 && $("vol").value.trim().length > 0 && S.sessions.length > 0;
+  $("startBtn").disabled = !ok;
+  $("setupWarn").textContent = ok ? "" :
+    S.people === 0 ? "Load the participant list to continue." :
+    !$("vol").value.trim() ? "Enter your name so scans can be traced back." :
+    "Add at least one session.";
+}
+
+function parseCsv(text){
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) return [];
+  const head = lines[0].split(",").map(h => h.trim().toLowerCase());
+  const ci = head.indexOf("code"), si = head.indexOf("serial"), ni = head.indexOf("name");
+  const pi = ["participant_id","workshop_id","id","pid"].map(h => head.indexOf(h)).find(i => i > -1);
+  if (ci === -1) throw new Error("The CSV needs a 'code' column.");
+  const out = [];
+  for (let i = 1; i < lines.length; i++){
+    const c = lines[i].split(",");
+    const code = normalise(c[ci]);
+    if (code.length === LEN) out.push({
+      code, serial: si > -1 ? +c[si] : i,
+      name: ni > -1 ? (c[ni]||"").trim() : "",
+      pid:  pi !== undefined && pi > -1 ? (c[pi]||"").trim() : ""
+    });
+  }
+  return out;
+}
+
+async function loadCodes(text){
+  const rows = parseCsv(text);
+  if (!rows.length) throw new Error("No usable codes found in that file.");
+  await putPeople(rows);
+  S.people = rows.length;
+  $("codeState").textContent = `${rows.length} participants loaded and stored on this phone.`;
+  $("codeState").classList.remove("bad-text");
+  checkReady();
+}
+
+/* ------------------------------------------------------------------ *
+ * Screens
+ * ------------------------------------------------------------------ */
+function go(id){
+  document.querySelectorAll(".screen").forEach(s => s.classList.remove("on"));
+  $(id).classList.add("on");
+}
+
+function drawStations(){
+  const box = $("stationList");
+  box.innerHTML = "";
+  $("stationClock").textContent = new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+
+  const reg = document.createElement("button");
+  reg.className = "station";
+  reg.style.borderLeftColor = "var(--warn)";
+  reg.innerHTML = `<b>Register a badge</b><span>Link a spare badge to a participant ID</span>`;
+  reg.addEventListener("click", enterPairing);
+  box.appendChild(reg);
+
+  venues().forEach(v => {
+    const live = activeAt(v);
+    const b = document.createElement("button");
+    b.className = "station" + (live ? "" : " idle");
+    b.innerHTML = live
+      ? `<b>${v}</b><span>${live.name} · ${live.start}–${live.end}</span>`
+      : `<b>${v}</b><span>Nothing scheduled right now — tap to scan anyway</span>`;
+    b.addEventListener("click", () => enterStation(v));
+    box.appendChild(b);
+  });
+}
+
+async function enterPairing(){
+  S.mode = "pair";
+  S.session = { id:"registration", name:"Registration", venue:"Registration", start:"", end:"" };
+  S.station = "Registration";
+  $("sessName").textContent = "Register a badge";
+  $("sessMeta").textContent = `Registration · ${S.volunteer}`;
+  S.count = (await allLinks()).filter(l => l.at.slice(0,10) === today()).length;
+  $("sessCount").textContent = S.count;
+  $("pairPanel").classList.add("on");
+  $("typeBtn").textContent = "Type badge or ID";
+  clearPair();
+  go("s-scan");
+  startCamera();
+}
+
+async function enterStation(venue){
+  S.mode = "attend";
+  $("pairPanel").classList.remove("on");
+  $("typeBtn").textContent = "Type a code";
+  const live = activeAt(venue);
+  if (!live){
+    const here = S.sessions.filter(s => s.venue === venue);
+    if (!here.length) return;
+    S.session = here[0];
+  } else S.session = live;
+
+  S.station = venue;
+  $("sessName").textContent = S.session.name;
+  $("sessMeta").textContent = `${venue} · ${S.session.start}–${S.session.end} · ${S.volunteer}`;
+  const scans = await allScans();
+  S.count = scans.filter(s => s.sessionId === S.session.id && s.day === today()).length;
+  $("sessCount").textContent = S.count;
+  go("s-scan");
+  startCamera();
+}
+
+async function refreshReview(){
+  const scans = await allScans();
+  const links = await allLinks();
+  const mine = S.mode === "pair"
+    ? links.filter(l => l.at.slice(0,10) === today()).map(l => ({ code:l.code, at:l.at, name:l.name }))
+    : scans.filter(s => S.session && s.sessionId === S.session.id && s.day === today());
+  $("rCount").textContent = mine.length;
+  $("rQueue").innerHTML = `<span class="pill q">${scans.filter(s=>!s.sent).length + links.filter(l=>!l.sent).length}</span>`;
+  $("rSent").innerHTML  = `<span class="pill s">${scans.filter(s=>s.sent).length + links.filter(l=>l.sent).length}</span>`;
+
+  // A queue that is not draining must be visible. Without this the counter
+  // just sits there and a volunteer cannot tell "no signal yet" from "these
+  // scans are being rejected and nobody knows".
+  const st = $("syncState");
+  const waiting = scans.filter(s=>!s.sent).length + links.filter(l=>!l.sent).length;
+  st.textContent = !S.supaUrl || !S.supaKey
+      ? "No server configured — export the CSV at the end of the day."
+    : lastSyncError ? lastSyncError
+    : !navigator.onLine ? "No signal. Everything is saved and will send later."
+    : waiting ? "Sending…"
+    : "Everything on this phone has been sent.";
+  st.classList.toggle("bad-text", !!lastSyncError);
+  const log = $("rLog"); log.innerHTML = "";
+  for (const s of mine.slice(-40).reverse()){
+    const p = await getPerson(s.code);
+    const d = document.createElement("div");
+    d.innerHTML = `<span>${s.name || p?.name || p?.pid || pretty(s.code)}</span>
+      <em>${new Date(s.at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"})}</em>`;
+    log.appendChild(d);
+  }
+}
+
+function exportCsv(){
+  allScans().then(async scans => {
+    const head = "code,participant_id,name,session_id,session,venue,scanned_at,day,volunteer,device,source\n";
+    const lines = [];
+    for (const s of scans){
+      const p = await getPerson(s.code);
+      lines.push([s.code, s.pid || p?.pid || "", `"${(s.name || p?.name || "").replace(/"/g,'""')}"`,
+                  s.sessionId, s.sessionName, s.venue, s.at, s.day,
+                  s.volunteer, s.device, s.source].join(","));
+    }
+    const blob = new Blob([head + lines.join("\n")], { type:"text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `scans-${S.device}-${today()}.csv`;
+    a.click();
+  });
+}
+
+/* ------------------------------------------------------------------ *
+ * Wiring
+ * ------------------------------------------------------------------ */
+$("pickCsv").addEventListener("click", () => $("csvFile").click());
+$("csvFile").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  try{ await loadCodes(await f.text()); }
+  catch(err){ $("codeState").textContent = err.message; $("codeState").classList.add("bad-text"); }
+});
+$("vol").addEventListener("input", () => { S.volunteer = $("vol").value.trim(); persistCfg(); checkReady(); });
+$("supaUrl").addEventListener("change", () => { S.supaUrl = $("supaUrl").value.trim(); persistCfg(); });
+$("supaKey").addEventListener("change", () => { S.supaKey = $("supaKey").value.trim(); persistCfg(); });
+$("addSess").addEventListener("click", () => {
+  S.sessions.push({ id:"s"+Date.now().toString(36), name:"New session", venue:"", start:"09:00", end:"10:00" });
+  drawSessions(); persistCfg(); checkReady();
+});
+$("startBtn").addEventListener("click", () => { persistCfg(); drawStations(); go("s-station"); });
+$("backSetup").addEventListener("click", () => go("s-setup"));
+$("leaveStation").addEventListener("click", () => { stopCamera(); drawStations(); go("s-station"); });
+
+$("typeBtn").addEventListener("click", () => { $("typeSheet").classList.add("on"); $("typeIn").focus(); });
+$("typeClose").addEventListener("click", () => $("typeSheet").classList.remove("on"));
+$("typeIn").addEventListener("input", () => {
+  const el = $("typeIn");
+  if (S.mode !== "pair"){
+    const up = el.value.toUpperCase();
+    if (el.value !== up) el.value = up;
+  }
+  const c = normalise(el.value);
+  if (S.mode === "pair"){
+    $("typeHint").textContent = validCode(c) ? "Badge code recognised." : "Anything that isn't a badge code is treated as a participant ID.";
+    $("typeHint").classList.remove("bad-text");
+    return;
+  }
+  $("typeHint").textContent = c.length < LEN ? "The last character checks the rest, so a typo is caught here."
+    : validCode(c) ? "Code looks good." : "That code fails its check — read it again.";
+  $("typeHint").classList.toggle("bad-text", c.length === LEN && !validCode(c));
+});
+$("typeGo").addEventListener("click", async () => {
+  const raw = $("typeIn").value.trim();
+  S.cooldown.delete(normalise(raw)); S.cooldown.delete(raw);
+  if (S.mode === "pair") await pairScan(raw);
+  else await record(raw, "manual");
+  $("typeIn").value = ""; $("typeSheet").classList.remove("on");
+});
+$("pairClear").addEventListener("click", clearPair);
+$("pairSave").addEventListener("click", savePair);
+$("pairName").addEventListener("input", () => { S.pair.name = $("pairName").value.trim(); $("pairSave").disabled = !(S.pair.code && S.pair.pid); });
+
+$("openReview").addEventListener("click", () => { refreshReview(); $("reviewSheet").classList.add("on"); });
+$("reviewClose").addEventListener("click", () => $("reviewSheet").classList.remove("on"));
+$("syncNow").addEventListener("click", sync);
+$("exportBtn").addEventListener("click", exportCsv);
+$("exportLinks").addEventListener("click", async () => {
+  const rows = await allLinks();
+  const csv = "code,participant_id,name,replaces,linked_at,volunteer,device\n" +
+    rows.map(l => [l.code, l.pid, `"${(l.name||"").replace(/"/g,'""')}"`,
+                   l.replaces||"", l.at, l.volunteer, l.device].join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv"}));
+  a.download = `links-${S.device}-${today()}.csv`; a.click();
+});
+
+/* The installed app loads from https://localhost, so a setup LINK is
+   meaningless inside it — there is no address bar to paste into. The same
+   payload is therefore accepted as bare text, which travels fine over
+   WhatsApp or a scrap of paper. Both forms are handled here. */
+function applyCfg(text){
+  const raw = String(text || "").trim();
+  if (!raw) return false;
+  const blob = raw.includes("#cfg=") ? raw.slice(raw.indexOf("#cfg=") + 5) : raw;
+  let inc;
+  try{ inc = JSON.parse(atob(blob.trim())); }catch(e){ return false; }
+  if (!inc || typeof inc !== "object") return false;
+  if (Array.isArray(inc.sessions) && inc.sessions.length) S.sessions = inc.sessions;
+  if (inc.supaUrl) S.supaUrl = inc.supaUrl;
+  if (inc.supaKey) S.supaKey = inc.supaKey;
+  $("supaUrl").value = S.supaUrl;
+  $("supaKey").value = S.supaKey;
+  drawSessions();
+  persistCfg();
+  checkReady();
+  return true;
+}
+
+function cfgBlob(){
+  // The server details ride along, so one payload configures all 50 phones
+  // and rotating the key is an edit here rather than a redeploy of every
+  // handset. The publishable key is safe to pass around; RLS is what
+  // protects the data, not the secrecy of this string.
+  return btoa(JSON.stringify({ sessions:S.sessions, supaUrl:S.supaUrl, supaKey:S.supaKey }));
+}
+
+$("pasteCfg").addEventListener("click", async () => {
+  const state = $("cfgState");
+  let text = "";
+  try{ text = await navigator.clipboard.readText(); }catch(e){}
+  if (!text) text = prompt("Paste the setup code:") || "";
+  const ok = applyCfg(text);
+  state.textContent = ok
+    ? `Setup applied — ${S.sessions.length} sessions${S.supaUrl ? " and the server details" : ""}.`
+    : "That does not look like a setup code.";
+  state.classList.toggle("bad-text", !ok);
+});
+
+$("shareCfg").addEventListener("click", async () => {
+  const cfg = cfgBlob();
+  // Inside the installed app the origin is https://localhost and a link would
+  // be useless, so share the bare code there and a link on the web.
+  const native = location.protocol === "file:" || location.hostname === "localhost";
+  const payload = native ? cfg : location.origin + location.pathname + "#cfg=" + cfg;
+  try{
+    await navigator.clipboard.writeText(payload);
+    $("shareCfg").textContent = native ? "Setup code copied" : "Link copied";
+  }catch(e){
+    prompt(native ? "Copy this setup code:" : "Copy this link:", payload);
+  }
+  setTimeout(() => $("shareCfg").textContent = "Copy setup for other phones", 2000);
+});
+
+/* ------------------------------------------------------------------ *
+ * Boot
+ * ------------------------------------------------------------------ */
+(async function boot(){
+  await openDb();
+
+  S.device = await getMeta("device");
+  if (!S.device){ S.device = "P" + Math.random().toString(36).slice(2,7).toUpperCase(); await setMeta("device", S.device); }
+
+  const cfg = await getMeta("cfg");
+  S.sessions  = cfg?.sessions  || DEFAULT_SESSIONS.slice();
+  S.supaUrl   = cfg?.supaUrl   || "";
+  S.supaKey   = cfg?.supaKey   || "";
+  S.volunteer = cfg?.volunteer || "";
+
+  const pendingCfg = location.hash.startsWith("#cfg=") ? location.hash.slice(5) : "";
+  if (pendingCfg) history.replaceState(null, "", location.pathname);
+
+  $("vol").value = S.volunteer;
+  $("supaUrl").value = S.supaUrl;
+  $("supaKey").value = S.supaKey;
+  drawSessions();
+  if (pendingCfg) applyCfg(pendingCfg);
+
+  S.people = await countPeople();
+  if (S.people){
+    $("codeState").textContent = `${S.people} participants already on this phone.`;
+  } else {
+    try{
+      const r = await fetch("./codes.csv", { cache:"no-store" });
+      if (r.ok) await loadCodes(await r.text());
+      else $("codeState").textContent = "No participant list yet — choose codes_master.csv below.";
+    }catch(e){ $("codeState").textContent = "No participant list yet — choose codes_master.csv below."; }
+  }
+  checkReady();
+
+  if (S.people && S.volunteer && S.sessions.length){ drawStations(); go("s-station"); }
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(()=>{});
+})();
+</script>
+</body>
+</html>

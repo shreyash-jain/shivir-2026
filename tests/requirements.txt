@@ -1,0 +1,4 @@
+pytest
+playwright
+opencv-python-headless
+numpy

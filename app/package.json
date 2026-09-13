@@ -1,0 +1,18 @@
+{
+  "name": "attendance-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Android shell around the static scanner in ../scanner. Adds nothing to the app itself - it is the same files, installed instead of bookmarked.",
+  "scripts": {
+    "sync": "cap sync android",
+    "apk": "cap sync android && cd android && ./gradlew assembleDebug",
+    "release": "cap sync android && cd android && ./gradlew assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  }
+}
