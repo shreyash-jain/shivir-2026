@@ -2,11 +2,12 @@
   "name": "attendance-app",
   "version": "1.0.0",
   "private": true,
-  "description": "Android shell around the static scanner in ../scanner. Adds nothing to the app itself - it is the same files, installed instead of bookmarked.",
+  "description": "Android shell around the static scanner in ../scanner. build_www.sh copies it and bakes in the server details; nothing else is added.",
   "scripts": {
-    "sync": "cap sync android",
-    "apk": "cap sync android && cd android && ./gradlew assembleDebug",
-    "release": "cap sync android && cd android && ./gradlew assembleRelease"
+    "www": "sh build_www.sh",
+    "sync": "sh build_www.sh && cap sync android",
+    "apk": "sh build_www.sh && cap sync android && cd android && ./gradlew assembleDebug",
+    "release": "sh build_www.sh && cap sync android && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@capacitor/android": "^7.0.0",

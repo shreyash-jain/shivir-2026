@@ -378,7 +378,12 @@ const allScans = () => tx("scans","readonly", s => s.getAll());
    store keeps the events regardless; this keeps `people` agreeing with it. */
 async function putPeople(rows){
   const existing = await tx("people","readonly", s => s.getAll());
-  const linked = new Map(existing.filter(p => p.linkedAt).map(p => [p.code, p]));
+  // Only pairings that have NOT reached the server yet. Once a link has been
+  // sent the server's copy is the truth -- including a later reissue done on
+  // another phone that voids this badge, which a permanent local override
+  // would wrongly ignore.
+  const unsent = new Set((await allLinks()).filter(l => !l.sent).map(l => l.code));
+  const linked = new Map(existing.filter(p => p.linkedAt && unsent.has(p.code)).map(p => [p.code, p]));
   return new Promise((res, rej) => {
     const t = DB.h.transaction("people","readwrite");
     const st = t.objectStore("people");
@@ -427,10 +432,12 @@ const nowMin = () => { const d = new Date(); return d.getHours()*60 + d.getMinut
 // Local date, never UTC. India is UTC+5:30, so toISOString() would say
 // "yesterday" until 05:30 -- exactly when volunteers set up for the 06:00
 // prayer, and every one of those scans would carry the wrong day.
-const today = () => {
-  const d = new Date(), z = n => String(n).padStart(2, "0");
+const localDay = d => {
+  const z = n => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`;
 };
+const today = () => localDay(new Date());
+const dayOf = iso => localDay(new Date(iso));   // an ISO timestamp is UTC; compare local days
 const $ = id => document.getElementById(id);
 
 /* There is deliberately no activeAt(venue) any more. Choosing a session by
@@ -1214,7 +1221,7 @@ async function enterPairing(){
   S.assigned = true;
   $("sessName").textContent = "Register a badge";
   $("sessMeta").textContent = `Registration · ${S.volunteer}`;
-  S.count = (await allLinks()).filter(l => l.at.slice(0,10) === today()).length;
+  S.count = (await allLinks()).filter(l => dayOf(l.at) === today()).length;
   $("sessCount").textContent = S.count;
   $("pairPanel").classList.add("on");
   $("typeBtn").textContent = "Type badge or ID";
@@ -1244,7 +1251,7 @@ async function refreshReview(){
   const scans = await allScans();
   const links = await allLinks();
   const mine = S.mode === "pair"
-    ? links.filter(l => l.at.slice(0,10) === today()).map(l => ({ code:l.code, at:l.at, name:l.name }))
+    ? links.filter(l => dayOf(l.at) === today()).map(l => ({ code:l.code, at:l.at, name:l.name }))
     : scans.filter(s => S.session && s.sessionId === S.session.id && s.day === today());
   $("rCount").textContent = mine.length;
   $("rQueue").innerHTML = `<span class="pill q">${scans.filter(s=>!s.sent).length + links.filter(l=>!l.sent).length}</span>`;
@@ -1472,7 +1479,11 @@ $("shareCfg").addEventListener("click", async () => {
   $("supaUrl").value = S.supaUrl;
   $("supaKey").value = S.supaKey;
   if (pendingCfg) applyCfg(pendingCfg);
+  // No server known: wait for the hosted details, they decide the next screen.
+  // Already known: refresh in the background so a rotated key reaches phones
+  // that have the old one, without an offline boot waiting on the timeout.
   if (!S.supaUrl || !S.supaKey) await loadServerDetails();
+  else loadServerDetails();
   describeConf();
 
   S.people = await countPeople();

@@ -65,14 +65,14 @@ The APK lands at `android/app/build/outputs/apk/debug/app-debug.apk`
 (~4 MB). Install it with `adb install -r <path>`, or copy it to the phones and
 open it.
 
-**Bundling the roll.** `npm run apk` copies whatever is in `../scanner` at that
-moment. Put `codes_master.csv` at `scanner/codes.csv` first and every phone
-ships with the participant list already loaded — no file picking during setup.
-Neither the CSV nor the APK is committed; see `.gitignore` and the note there
-about why the code list never goes in version control.
+**What gets bundled.** `npm run apk` runs `build_www.sh`, which copies
+`../scanner` into `www/` and fetches the live site's `/config.json` into it, so
+an APK phone opens straight on the volunteer login with the server already
+known. The roll is **not** bundled — it arrives with the volunteer's first
+login, gated by their credentials — because APKs get forwarded around on
+WhatsApp and the code list must not travel with them.
 
-After editing anything in `scanner/`, re-run `npm run apk`. `npx cap sync
-android` alone only copies the assets; it does not build.
+After editing anything in `scanner/`, re-run `npm run apk`.
 
 ## Signing a release build
 

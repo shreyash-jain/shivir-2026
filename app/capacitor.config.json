@@ -1,7 +1,7 @@
 {
   "appId": "org.shivir.attendance",
   "appName": "Attendance",
-  "webDir": "../scanner",
+  "webDir": "www",
   "android": {
     "allowMixedContent": false
   },
