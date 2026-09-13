@@ -42,7 +42,9 @@ python -m http.server 8000 --directory dashboard
 Sign in with the project URL, the **publishable** key (the same public one the
 phones carry — it is not a secret and it grants nothing on its own), and your
 organiser email and password. The URL, key and email are remembered in
-`localStorage` for next time; the password and the session token are not.
+`localStorage` for next time. The signed-in session is kept in
+`sessionStorage`, so a refresh does not sign you out but closing the tab does;
+*Sign out* clears it. The password is never stored.
 
 ## What it shows
 

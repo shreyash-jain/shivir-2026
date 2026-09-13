@@ -377,7 +377,18 @@ const A = { url:"", key:"", token:"", refresh:"", expires:0, email:"" };
 const POLL = 20000;
 let poller = null, absRows = [], tab = "live";
 
-const REMEMBER = "attendance.organiser";   // connection details only, never the token
+const REMEMBER = "attendance.organiser";   // connection details, in localStorage
+// The signed-in session, in sessionStorage: it survives a refresh, which an
+// admin will do all day, and dies with the tab, which is the right default on
+// a machine other people may sit at. Sign out clears it explicitly.
+const SESSION  = "attendance.organiser.session";
+
+function saveSession(){
+  try{ sessionStorage.setItem(SESSION, JSON.stringify(
+    { token:A.token, refresh:A.refresh, expires:A.expires, email:A.email, url:A.url, key:A.key })); }
+  catch(e){}
+}
+function dropSession(){ try{ sessionStorage.removeItem(SESSION); }catch(e){} }
 
 /* ---------------------------------------------------------------- http */
 
@@ -430,6 +441,7 @@ async function signIn(email, password){
   A.refresh = body.refresh_token;
   A.expires = Date.now() + (body.expires_in || 3600) * 1000;
   A.email = body.user?.email || email;
+  saveSession();
 }
 
 async function refreshToken(){
@@ -443,6 +455,7 @@ async function refreshToken(){
   const b = await res.json();
   A.token = b.access_token; A.refresh = b.refresh_token;
   A.expires = Date.now() + (b.expires_in || 3600) * 1000;
+  saveSession();
   return true;
 }
 
@@ -1119,6 +1132,7 @@ $("pw").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").
 
 $("outBtn").addEventListener("click", () => {
   clearInterval(poller);
+  dropSession();
   A.token = A.refresh = ""; A.expires = 0;
   $("pw").value = "";
   $("s-admin").classList.remove("on");
@@ -1175,6 +1189,23 @@ async function start(){
     box.open = true;
     $("serverSummary").textContent = "Server details";
   }
+
+  // A session from before the refresh: validate it by refreshing the token
+  // rather than trusting it, then carry straight on.
+  try{
+    const s = JSON.parse(sessionStorage.getItem(SESSION) || "null");
+    if (s && s.refresh && s.url && s.key){
+      A.url = s.url; A.key = s.key; A.email = s.email || "";
+      A.refresh = s.refresh; A.token = s.token || ""; A.expires = s.expires || 0;
+      if (await refreshToken()){
+        $("url").value = A.url; $("key").value = A.key;
+        if (A.email) $("email").value = A.email;
+        await start();
+        return;
+      }
+      dropSession();
+    }
+  }catch(e){ dropSession(); }
 
   ($("url").value && $("key").value
     ? ($("email").value ? $("pw") : $("email"))
