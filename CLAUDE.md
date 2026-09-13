@@ -102,7 +102,11 @@ miss. There is a regression test for this; keep it.
 Sessions are `(id, name, venue, start, end)`, shared across all days, with
 `session_days` saying which days each one runs. A scan is attributed to the
 session **the volunteer was assigned to** by the admin, for that day. At the
-start of a shift the volunteer taps their own name and sees their sessions.
+start of a shift the volunteer logs in with the username and password the
+admin set, and sees their sessions. The first login on a given phone needs
+signal; the phone then keeps a per-device salted hash so the same person can
+log in again on it offline. Nothing about a volunteer who has never used a
+phone is stored on it.
 
 Do not attribute scans by venue and clock time. Sessions run late, windows
 overlap, and two sessions can run at once — venue+clock cannot separate them

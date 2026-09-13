@@ -8,7 +8,7 @@ import pathlib
 FIXTURES = pathlib.Path(__file__).parent / "fixtures"
 
 
-VOLUNTEER = {"id": "v-test", "name": "Test Volunteer"}
+VOLUNTEER = {"id": "v-test", "name": "Test Volunteer", "username": "test", "password": "pw1234"}
 
 
 def config_hash(assigned=True, extra_sessions=(), **extra):
@@ -30,7 +30,6 @@ def config_hash(assigned=True, extra_sessions=(), **extra):
     cfg = {
         "sessions": sessions,
         "sessionDays": {today: [s["id"] for s in sessions]},
-        "volunteers": [VOLUNTEER],
         "assignments": ([{"volunteer_id": VOLUNTEER["id"],
                           "session_id": "test-session", "day": today}]
                         if assigned else []),
@@ -65,10 +64,21 @@ def open_setup(pw, feed, server, **cfg):
     return browser, page, errors
 
 
-def pick_volunteer(page, name=None):
-    """Tap your own name on the "who is using this phone?" screen."""
+def pick_volunteer(page, username=None, password=None):
+    """Log in as the test volunteer.
+
+    There is no server in these tests, so the phone is first taught the
+    credential the way a real first login on wifi would -- through the app's
+    own rememberVolunteer() -- and the login then succeeds offline, which is
+    the path a volunteer at a venue with no signal takes.
+    """
     page.wait_for_selector("#s-who.on", timeout=10000)
-    page.click(f"#whoList .station:has-text('{name or VOLUNTEER['name']}')")
+    page.evaluate(
+        "([u, p, id, n]) => rememberVolunteer(u, p, id, n)",
+        [VOLUNTEER["username"], VOLUNTEER["password"], VOLUNTEER["id"], VOLUNTEER["name"]])
+    page.fill("#loginUser", username or VOLUNTEER["username"])
+    page.fill("#loginPass", password or VOLUNTEER["password"])
+    page.click("#loginGo")
     page.wait_for_selector("#s-station.on", timeout=10000)
     page.wait_for_timeout(300)
 

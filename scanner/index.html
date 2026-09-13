@@ -188,19 +188,23 @@ video{width:100%;height:100%;object-fit:cover;display:block}
 <!-- ============ WHO ============ -->
 <section id="s-who" class="screen">
   <div class="bar">
-    <div class="who"><b>Who is using this phone?</b><span id="whoMeta">Tap your name</span></div>
+    <div class="who"><b>Volunteer login</b><span id="whoMeta">Use the details the organiser gave you</span></div>
     <button class="iconbtn" id="whoBack" aria-label="Settings">⚙</button>
   </div>
   <div class="pad">
-    <input id="whoFilter" placeholder="Search for your name" autocomplete="off" style="margin-bottom:14px">
-    <div id="whoList"></div>
-    <div id="whoFallback" style="display:none">
-      <p class="note" style="margin-bottom:12px">No volunteer list on this phone. Type your name instead — scans will still be traced back to you.</p>
-      <div class="field">
-        <label for="vol">Your name</label>
-        <input id="vol" placeholder="e.g. Anjali" autocomplete="name">
-      </div>
-      <button class="btn" id="whoGo">Continue</button>
+    <div class="field">
+      <label for="loginUser">Username</label>
+      <input id="loginUser" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" inputmode="text">
+    </div>
+    <div class="field">
+      <label for="loginPass">Password</label>
+      <input id="loginPass" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn" id="loginGo">Log in</button>
+    <p class="note" id="loginState" style="margin-top:12px"></p>
+    <div id="knownWrap" style="margin-top:26px;display:none">
+      <p class="note" style="margin-bottom:10px">Logged in on this phone before — works with no signal:</p>
+      <div id="knownList"></div>
     </div>
   </div>
 </section>
@@ -401,7 +405,7 @@ async function seenAlready(dedupe){
  * ------------------------------------------------------------------ */
 const S = {
   volunteer:"", volunteerId:"", device:"", supaUrl:"", supaKey:"",
-  sessions:[], volunteers:[], assignments:[], sessionDays:{},
+  sessions:[], assignments:[], sessionDays:{},
   station:null, session:null, assigned:true, count:0, people:0,
   cooldown:new Map(), busy:false, stream:null, loop:null, detector:null,
   mode:"attend", pair:{ code:null, pid:null, name:"", known:null }
@@ -798,7 +802,7 @@ setInterval(sync, 25000);
 function persistCfg(){
   setMeta("cfg", {
     sessions:S.sessions, sessionDays:S.sessionDays,
-    volunteers:S.volunteers, assignments:S.assignments,
+    assignments:S.assignments,
     supaUrl:S.supaUrl, supaKey:S.supaKey,
     volunteer:S.volunteer, volunteerId:S.volunteerId
   });
@@ -812,7 +816,7 @@ function describeConf(){
   }
   const mine = S.assignments.length;
   el.textContent =
-    `${S.sessions.length} sessions, ${S.volunteers.length} volunteers` +
+    `${S.sessions.length} sessions` +
     (mine ? `, ${mine} assignments` : "") + " stored on this phone.";
   el.classList.remove("bad-text");
 }
@@ -866,10 +870,9 @@ async function loadConfFromServer(){
   };
 
   try{
-    const [sessions, days, volunteers, assignments] = await Promise.all([
+    const [sessions, days, assignments] = await Promise.all([
       get("sessions?select=id,name,venue,starts,ends&order=starts"),
       get("session_days?select=session_id,day"),
-      get("volunteer_roster?select=id,name&order=name"),
       get("assignments?select=volunteer_id,session_id,day")
     ]);
 
@@ -879,7 +882,6 @@ async function loadConfFromServer(){
       start:String(s.starts).slice(0,5), end:String(s.ends).slice(0,5)
     }));
     S.sessionDays = days.reduce((m,r) => ((m[r.day] = m[r.day] || []).push(r.session_id), m), {});
-    S.volunteers = volunteers;
     S.assignments = assignments;
     persistCfg();
     describeConf();
@@ -947,30 +949,115 @@ function go(id){
  * sessions running at the same time separable: the assignment says which
  * door this person is standing at, and the clock cannot.
  * ------------------------------------------------------------------ */
-function drawWho(){
-  const list = $("whoList"), fallback = $("whoFallback");
-  const roster = S.volunteers || [];
-  fallback.style.display = roster.length ? "none" : "block";
-  $("whoFilter").style.display = roster.length > 8 ? "block" : "none";
+/* Credentials remembered on this phone.
+ *
+ * The first login has to be checked by the server, which needs signal. After
+ * that the phone keeps a salted hash of the password, so the same person can
+ * log in again on the same phone at a venue with none. The salt is per device
+ * and the hash is useless anywhere else. Nothing about a volunteer who has
+ * never used this phone is stored on it. */
+async function deviceSalt(){
+  let s = await getMeta("salt");
+  if (!s){
+    s = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2,"0")).join("");
+    await setMeta("salt", s);
+  }
+  return s;
+}
+async function credHash(username, password){
+  const salt = await deviceSalt();
+  const data = new TextEncoder().encode(`${salt}:${username.toLowerCase()}:${password}`);
+  const buf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2,"0")).join("");
+}
+async function rememberVolunteer(username, password, id, name){
+  const creds = (await getMeta("creds")) || {};
+  creds[username.toLowerCase()] = { hash: await credHash(username, password), id, name, at: Date.now() };
+  await setMeta("creds", creds);
+}
+async function forgetVolunteer(username){
+  const creds = (await getMeta("creds")) || {};
+  delete creds[username.toLowerCase()];
+  await setMeta("creds", creds);
+}
+
+async function serverLogin(username, password){
+  // Returns {id,name} on success, null on wrong credentials, and throws when
+  // the server could not be reached -- the caller treats those differently.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try{
+    const r = await fetch(S.supaUrl.replace(/\/+$/,"") + "/rest/v1/rpc/volunteer_login", {
+      method:"POST", signal: ctrl.signal,
+      headers:{ "Content-Type":"application/json", apikey:S.supaKey, Authorization:"Bearer " + S.supaKey },
+      body: JSON.stringify({ p_username: username, p_password: password })
+    });
+    if (!r.ok) throw new Error("login " + r.status);
+    const rows = await r.json();
+    return rows.length ? rows[0] : null;
+  }finally{ clearTimeout(timer); }
+}
+
+async function volunteerLogin(){
+  const username = $("loginUser").value.trim(), password = $("loginPass").value;
+  const st = $("loginState");
+  st.classList.remove("bad-text");
+  if (!username || !password){ st.textContent = "Both fields are needed."; st.classList.add("bad-text"); return; }
+  $("loginGo").disabled = true;
+  st.textContent = "Checking…";
+  try{
+    const creds = (await getMeta("creds")) || {};
+    const known = creds[username.toLowerCase()];
+    const canAsk = S.supaUrl && S.supaKey && navigator.onLine;
+
+    if (canAsk){
+      try{
+        const who = await serverLogin(username, password);
+        if (who){
+          await rememberVolunteer(username, password, who.id, who.name);
+          $("loginPass").value = "";
+          return pickVolunteer(who.id, who.name);
+        }
+        // The server is authoritative. If it says no, a stale copy on this
+        // phone must not say yes -- the password may have been changed.
+        if (known) await forgetVolunteer(username);
+        st.textContent = "Wrong username or password.";
+        st.classList.add("bad-text");
+        return;
+      }catch(e){
+        /* unreachable -- fall through to what this phone remembers */
+      }
+    }
+
+    if (known && known.hash === await credHash(username, password)){
+      $("loginPass").value = "";
+      return pickVolunteer(known.id, known.name);
+    }
+    st.textContent = known
+      ? "Wrong password."
+      : "No signal, and this phone hasn't seen you before. Log in once on wifi and it will remember you.";
+    st.classList.add("bad-text");
+  }finally{
+    $("loginGo").disabled = false;
+    if (st.textContent === "Checking…") st.textContent = "";
+  }
+}
+
+async function drawWho(){
+  $("loginState").textContent = "";
+  const creds = (await getMeta("creds")) || {};
+  const names = Object.entries(creds).sort((a,b) => b[1].at - a[1].at);
+  $("knownWrap").style.display = names.length ? "block" : "none";
+  const list = $("knownList");
   list.innerHTML = "";
-
-  const q = $("whoFilter").value.trim().toLowerCase();
-  const shown = roster.filter(v => !q || v.name.toLowerCase().includes(q));
-
-  for (const v of shown){
-    const mine = S.assignments.filter(
-      a => a.volunteer_id === v.id && a.day === today()).length;
+  for (const [u, c] of names){
     const b = document.createElement("button");
     b.className = "station";
-    b.innerHTML = `<b>${v.name}</b><span>${
-      mine ? `${mine} session${mine === 1 ? "" : "s"} today` : "No sessions assigned today"
-    }</span>`;
-    b.addEventListener("click", () => pickVolunteer(v.id, v.name));
+    b.innerHTML = `<b>${c.name}</b><span>${u} · tap to fill in</span>`;
+    b.addEventListener("click", () => { $("loginUser").value = u; $("loginPass").focus(); });
     list.appendChild(b);
   }
-  if (roster.length && !shown.length){
-    list.innerHTML = `<p class="note">Nobody matches that. Check with the admin.</p>`;
-  }
+  if (!$("loginUser").value && S.volunteer) $("loginUser").value = "";
 }
 
 function pickVolunteer(id, name){
@@ -1167,12 +1254,8 @@ $("startBtn").addEventListener("click", () => { persistCfg(); drawWho(); go("s-w
 $("backSetup").addEventListener("click", () => go("s-setup"));
 $("whoBack").addEventListener("click", () => go("s-setup"));
 $("changeWho").addEventListener("click", () => { drawWho(); go("s-who"); });
-$("whoFilter").addEventListener("input", drawWho);
-$("whoGo").addEventListener("click", () => {
-  const name = $("vol").value.trim();
-  if (!name) return;
-  pickVolunteer("", name);
-});
+$("loginGo").addEventListener("click", volunteerLogin);
+$("loginPass").addEventListener("keydown", e => { if (e.key === "Enter") volunteerLogin(); });
 $("showOther").addEventListener("click", () => {
   const el = $("otherList");
   const open = el.style.display !== "none";
@@ -1236,7 +1319,6 @@ function applyCfg(text){
   try{ inc = JSON.parse(atob(blob.trim())); }catch(e){ return false; }
   if (!inc || typeof inc !== "object") return false;
   if (Array.isArray(inc.sessions) && inc.sessions.length) S.sessions = inc.sessions;
-  if (Array.isArray(inc.volunteers))  S.volunteers  = inc.volunteers;
   if (Array.isArray(inc.assignments)) S.assignments = inc.assignments;
   if (inc.sessionDays && typeof inc.sessionDays === "object") S.sessionDays = inc.sessionDays;
   if (inc.supaUrl) S.supaUrl = inc.supaUrl;
@@ -1259,8 +1341,7 @@ function cfgBlob(){
   // reach the server at base camp can still be set up from one that could.
   return btoa(JSON.stringify({
     supaUrl:S.supaUrl, supaKey:S.supaKey,
-    sessions:S.sessions, sessionDays:S.sessionDays,
-    volunteers:S.volunteers, assignments:S.assignments
+    sessions:S.sessions, sessionDays:S.sessionDays, assignments:S.assignments
   }));
 }
 
@@ -1303,7 +1384,6 @@ $("shareCfg").addEventListener("click", async () => {
   const cfg = await getMeta("cfg");
   S.sessions    = cfg?.sessions    || DEFAULT_SESSIONS.slice();
   S.sessionDays = cfg?.sessionDays || {};
-  S.volunteers  = cfg?.volunteers  || [];
   S.assignments = cfg?.assignments || [];
   S.supaUrl     = cfg?.supaUrl     || "";
   S.supaKey     = cfg?.supaKey     || "";
@@ -1313,7 +1393,6 @@ $("shareCfg").addEventListener("click", async () => {
   const pendingCfg = location.hash.startsWith("#cfg=") ? location.hash.slice(5) : "";
   if (pendingCfg) history.replaceState(null, "", location.pathname);
 
-  $("vol").value = S.volunteer;
   $("supaUrl").value = S.supaUrl;
   $("supaKey").value = S.supaKey;
   if (pendingCfg) applyCfg(pendingCfg);

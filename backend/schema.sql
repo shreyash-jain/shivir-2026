@@ -59,17 +59,25 @@ create table if not exists session_days (
   primary key (session_id, day)
 );
 
--- Who is holding each phone. The super admin maintains this; phones download
--- it once and a volunteer picks their own name off the cached list at the
--- start of a shift. No logins: these are shared handsets and a password reset
--- at 6am in a field is not a support model.
+-- Who is holding each phone. The super admin maintains this, sets each
+-- volunteer a username and password, and a volunteer logs in on the phone at
+-- the start of a shift. The first login on a given phone needs signal; after
+-- that the phone remembers them and they can log in again offline.
 create table if not exists volunteers (
   id         text primary key,             -- short, stable, e.g. 'v-anjali'
   name       text not null,
+  username   text unique,                  -- what they type to log in
+  pass_hash  text,                         -- bcrypt, via set_volunteer_password()
   phone      text,                         -- for the shift coordinator only
   active     boolean not null default true,
   created_at timestamptz not null default now()
 );
+
+alter table volunteers add column if not exists username  text;
+alter table volunteers add column if not exists pass_hash text;
+create unique index if not exists volunteers_username on volunteers (lower(username));
+
+create extension if not exists pgcrypto;
 
 -- Which volunteer is working which session on which day.
 --
@@ -227,20 +235,19 @@ create policy "read assignments"
   on assignments for select to anon
   using (true);
 
--- Phones need volunteer NAMES so the person holding one can pick themselves
--- off a list. They do not need phone numbers. Rather than open the table, a
--- view exposes exactly the two columns required; it runs as its owner, so it
--- reads through the RLS that keeps the base table shut.
+-- Volunteer names, without phone numbers or password hashes. Phones used to
+-- read this to offer a pick-your-name list; they now log in instead and get
+-- their identity from volunteer_login(), so it is organiser-only.
 create or replace view volunteer_roster as
-  select id, name from volunteers where active;
+  select id, name, username from volunteers where active;
 
-grant select on volunteer_roster to anon, authenticated;
+revoke all on volunteer_roster from anon;
+grant select on volunteer_roster to authenticated;
 
 -- participants has RLS on and deliberately no anon policy, so the key
 -- cannot read names. Phones get the roll from the bundled codes.csv instead.
 -- The foreign key on scans.code still rejects codes that were never issued.
--- volunteers is shut for the same reason; volunteer_roster is the narrow
--- window into it.
+-- volunteers is shut for the same reason: it holds password hashes.
 
 -- ------------------------------------------------------------ ingestion
 --
@@ -352,6 +359,50 @@ revoke all on function ingest_scans(jsonb) from public;
 revoke all on function ingest_links(jsonb) from public;
 grant execute on function ingest_scans(jsonb) to anon, authenticated;
 grant execute on function ingest_links(jsonb) to anon, authenticated;
+
+-- --------------------------------------------------------- volunteer login
+--
+-- Phones authenticate a volunteer by calling volunteer_login(). It runs as
+-- the owner so it can read pass_hash, which nothing else exposes, and hands
+-- back only id and name. A wrong username and a wrong password look identical
+-- from outside. There is no lockout: the key is public, so a lockout would
+-- let anyone freeze a volunteer out of their phone at the door.
+
+create or replace function volunteer_login(p_username text, p_password text)
+returns table (id text, name text)
+language sql stable security definer set search_path = public as $$
+  select v.id, v.name
+  from volunteers v
+  where lower(v.username) = lower(trim(p_username))
+    and v.active
+    and v.pass_hash is not null
+    and v.pass_hash = crypt(p_password, v.pass_hash);
+$$;
+
+revoke all on function volunteer_login(text, text) from public;
+grant execute on function volunteer_login(text, text) to anon, authenticated;
+
+-- Organisers set or reset a password from the admin page. Stored bcrypt;
+-- the plain text is never written anywhere.
+create or replace function set_volunteer_password(p_id text, p_password text)
+returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not is_organiser() then
+    raise exception 'not an organiser' using errcode = '42501';
+  end if;
+  if length(coalesce(p_password, '')) < 4 then
+    raise exception 'password must be at least 4 characters';
+  end if;
+  update volunteers set pass_hash = crypt(p_password, gen_salt('bf', 8)) where volunteers.id = p_id;
+  if not found then
+    raise exception 'no such volunteer';
+  end if;
+end;
+$$;
+
+revoke all on function set_volunteer_password(text, text) from public;
+grant execute on function set_volunteer_password(text, text) to authenticated;
 
 -- ------------------------------------------------------------- organisers
 --

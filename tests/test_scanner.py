@@ -84,3 +84,38 @@ def test_manual_entry_validates_offline(server, badges):
         page.wait_for_timeout(300)
         assert "good" in page.inner_text("#typeHint").lower()
         b.close()
+
+
+def test_volunteer_login_offline_after_first_login(server, badges):
+    """The first login has to be checked by the server. After that the phone
+    remembers the volunteer, so a second login on the same phone works with
+    no signal at all -- and a wrong password is still refused."""
+    from browser import VOLUNTEER, open_setup
+    with sync_playwright() as pw:
+        b, page, errors = open_setup(pw, "blank.y4m", server)
+        # Teach the phone, as a first login on wifi would.
+        page.evaluate("([u,p,id,n]) => rememberVolunteer(u,p,id,n)",
+                      [VOLUNTEER["username"], VOLUNTEER["password"], VOLUNTEER["id"], VOLUNTEER["name"]])
+
+        page.fill("#loginUser", VOLUNTEER["username"])
+        page.fill("#loginPass", "wrong")
+        page.click("#loginGo")
+        page.wait_for_timeout(600)
+        assert page.is_visible("#s-who.on"), "a wrong password logged in"
+        assert "wrong" in page.inner_text("#loginState").lower()
+
+        page.fill("#loginPass", VOLUNTEER["password"])
+        page.click("#loginGo")
+        page.wait_for_selector("#s-station.on", timeout=5000)
+        assert VOLUNTEER["name"] in page.inner_text("#stationClock")
+
+        # Someone this phone has never seen, with no signal: told why.
+        page.click("#changeWho")
+        page.wait_for_timeout(300)
+        page.fill("#loginUser", "stranger")
+        page.fill("#loginPass", "whatever")
+        page.click("#loginGo")
+        page.wait_for_timeout(600)
+        assert "hasn't seen you" in page.inner_text("#loginState")
+        assert not errors
+        b.close()

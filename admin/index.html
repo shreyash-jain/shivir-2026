@@ -272,25 +272,28 @@ tr.gap td{background:rgba(229,72,77,.09)}
     <!-- ---------------- VOLUNTEERS ---------------- -->
     <div class="tabpane" data-pane="volunteers">
       <p class="hint">
-        The phones download this list and a volunteer taps their own name at the
-        start of a shift. No passwords — these are shared handsets and a password
-        reset at 6am in a field is not a support model. Deactivating someone
-        hides them from phones that sync afterwards; it does not touch scans
-        they already recorded.
+        Each volunteer logs in on the phone with the <b>username and password
+        you set here</b>. Their first login on a given phone needs signal — do it
+        at base camp on wifi; after that the phone remembers them and they can
+        log in again with none. Passwords are stored hashed and cannot be read
+        back, only reset. Deactivating someone stops them logging in; it does
+        not touch scans they already recorded.
       </p>
       <div class="scroll">
         <table>
           <thead><tr>
-            <th style="min-width:120px">Id</th><th style="min-width:170px">Name</th>
-            <th style="min-width:140px">Phone</th><th>Active</th><th class="num">Assigned</th><th></th>
+            <th style="min-width:160px">Name</th><th style="min-width:130px">Username</th>
+            <th>Password</th><th style="min-width:130px">Phone</th><th>Active</th><th class="num">Assigned</th><th></th>
           </tr></thead>
           <tbody id="volBody"></tbody>
         </table>
       </div>
       <h2>Add a volunteer</h2>
       <div class="row">
-        <input id="nvName" placeholder="Name" style="max-width:210px">
-        <input id="nvPhone" placeholder="Phone (optional)" style="max-width:180px" inputmode="tel">
+        <input id="nvName" placeholder="Name" style="max-width:200px">
+        <input id="nvUser" placeholder="Username" style="max-width:150px" autocapitalize="off" spellcheck="false">
+        <input id="nvPass" placeholder="Password" style="max-width:150px" autocapitalize="off" spellcheck="false">
+        <input id="nvPhone" placeholder="Phone (optional)" style="max-width:160px" inputmode="tel">
         <button class="btn" id="addVol">Add</button>
       </div>
       <p class="note" id="volNote"></p>
@@ -348,9 +351,9 @@ tr.gap td{background:rgba(229,72,77,.09)}
       <p class="note" style="margin-bottom:10px">
         Paste this into a volunteer's phone with <b>Paste setup from another
         phone</b>. It carries the project URL and publishable key only — the
-        phone pulls the schedule, the roster and the assignments from the
-        server itself, so this string does not go stale when you change them
-        here.
+        phone pulls the schedule and the assignments from the server itself,
+        so this string does not go stale when you change them here. Volunteers
+        then log in with the username and password from the Volunteers tab.
       </p>
       <div class="row">
         <button class="btn" id="copyCfg">Copy setup code</button>
@@ -499,7 +502,7 @@ async function loadConfig(){
   const [sessions, days, volunteers] = await Promise.all([
     rest("/sessions?select=id,name,venue,starts,ends&order=starts"),
     rest("/session_days?select=session_id,day&order=day"),
-    rest("/volunteers?select=id,name,phone,active&order=name")
+    rest("/volunteers?select=id,name,username,phone,active,has_password:pass_hash&order=name")
   ]);
   D.sessions = sessions;
   D.volunteers = volunteers;
@@ -750,12 +753,24 @@ function renderVolunteers(){
     const count = D.assignments.filter(a => a.volunteer_id === v.id).length;
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td class="mono" style="color:var(--muted)">${esc(v.id)}</td>
       <td><input value="${esc(v.name)}" data-f="name"></td>
+      <td><input value="${esc(v.username || "")}" data-f="username" autocapitalize="off" spellcheck="false" placeholder="none yet"></td>
+      <td><button class="btn sec sm" data-pw>${v.has_password ? "Reset" : "Set"}</button></td>
       <td><input value="${esc(v.phone || "")}" data-f="phone" inputmode="tel"></td>
       <td><input type="checkbox" data-active ${v.active ? "checked" : ""}></td>
       <td class="num">${count}</td>
       <td><button class="btn danger sm" data-del>Delete</button></td>`;
+
+    tr.querySelector("[data-pw]").addEventListener("click", async () => {
+      const pw = prompt(`New password for ${v.name}:`);
+      if (pw === null) return;
+      try{
+        await write("POST", "/rpc/set_volunteer_password", { p_id: v.id, p_password: pw });
+        v.has_password = true;
+        tr.querySelector("[data-pw]").textContent = "Reset";
+        toast(`Password set for ${v.name}. Tell them, and have them log in once on wifi.`);
+      }catch(e){ toast(e.message, true); }
+    });
 
     tr.querySelectorAll("[data-f]").forEach(inp => {
       inp.addEventListener("change", async () => {
@@ -794,25 +809,39 @@ function renderVolunteers(){
   }
 }
 
+$("nvName").addEventListener("input", () => {
+  if (!$("nvUser").dataset.touched)
+    $("nvUser").value = $("nvName").value.trim().toLowerCase().split(/\s+/)[0].replace(/[^a-z0-9]/g, "").slice(0, 16);
+});
+$("nvUser").addEventListener("input", () => { $("nvUser").dataset.touched = "1"; });
+
 $("addVol").addEventListener("click", async () => {
   const name = $("nvName").value.trim();
+  const username = $("nvUser").value.trim().toLowerCase();
+  const password = $("nvPass").value;
   const note = $("volNote");
   note.classList.remove("bad-text");
-  if (!name){
-    note.textContent = "A name is needed.";
+  if (!name || !username || password.length < 4){
+    note.textContent = "Name, username and a password of at least 4 characters are all needed.";
+    note.classList.add("bad-text");
+    return;
+  }
+  if (D.volunteers.some(v => (v.username || "").toLowerCase() === username)){
+    note.textContent = `The username "${username}" is already taken.`;
     note.classList.add("bad-text");
     return;
   }
   // Readable ids beat opaque ones when they turn up in an exported CSV.
-  const base = "v-" + (name.toLowerCase().replace(/[^a-z0-9]+/g, "-")
-                           .replace(/^-|-$/g, "").slice(0, 18) || "volunteer");
+  const base = "v-" + (username.replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 18) || "volunteer");
   let id = base, n = 2;
   while (D.volunteers.some(v => v.id === id)) id = `${base}-${n++}`;
   try{
     await write("POST", "/volunteers",
-                [{ id, name, phone: $("nvPhone").value.trim() || null }], "return=minimal");
-    $("nvName").value = $("nvPhone").value = "";
-    note.textContent = `Added as ${id}.`;
+                [{ id, name, username, phone: $("nvPhone").value.trim() || null }], "return=minimal");
+    await write("POST", "/rpc/set_volunteer_password", { p_id: id, p_password: password });
+    $("nvName").value = $("nvUser").value = $("nvPass").value = $("nvPhone").value = "";
+    delete $("nvUser").dataset.touched;
+    note.textContent = `Added ${name} — username ${username}. Tell them the password and have them log in once on wifi.`;
     await reloadAll();
   }catch(e){ note.textContent = e.message; note.classList.add("bad-text"); }
 });
