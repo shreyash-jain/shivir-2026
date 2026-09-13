@@ -147,8 +147,8 @@ video{width:100%;height:100%;object-fit:cover;display:block}
 <!-- ============ SETUP ============ -->
 <section id="s-setup" class="screen on">
   <div class="pad">
-    <h1>Set up this phone</h1>
-    <p class="sub">Do this once, on wifi at base camp. After that the app works with no signal.</p>
+    <h1>Phone settings</h1>
+    <p class="sub">Normally nothing here is needed — logging in with signal sets everything up. This is the fallback for a phone that cannot reach the server.</p>
 
     <h2>1. Connect</h2>
     <button class="btn sec" id="pasteCfg">Paste setup from the admin</button>
@@ -179,7 +179,7 @@ video{width:100%;height:100%;object-fit:cover;display:block}
     <input type="file" id="csvFile" accept=".csv,text/csv" hidden>
 
     <div style="height:22px"></div>
-    <button class="btn" id="startBtn" disabled>Continue</button>
+    <button class="btn" id="startBtn">Back to login</button>
     <p class="note" id="setupWarn"></p>
     <button class="btn sec" id="shareCfg" style="margin-top:10px">Copy setup for another phone</button>
   </div>
@@ -897,10 +897,9 @@ async function loadConfFromServer(){
 
 function checkReady(){
   const ok = S.people > 0 && S.sessions.length > 0;
-  $("startBtn").disabled = !ok;
   $("setupWarn").textContent = ok ? "" :
-    S.sessions.length === 0 ? "Load the sessions and volunteers to continue." :
-    "Load the participant list to continue.";
+    S.sessions.length === 0 ? "No sessions on this phone yet — a login with signal fetches them." :
+    "No participant list on this phone yet — a login with signal fetches it.";
 }
 
 function parseCsv(text){
@@ -998,6 +997,32 @@ async function serverLogin(username, password){
   }finally{ clearTimeout(timer); }
 }
 
+/* Pull the roll with the volunteer's own credentials. Server copy wins for
+   everything except pairings this phone did that have not synced yet, which
+   putPeople() preserves. */
+async function downloadRoll(username, password){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 20000);     // 1500 rows on wifi
+  try{
+    const r = await fetch(S.supaUrl.replace(/\/+$/,"") + "/rest/v1/rpc/download_roll", {
+      method:"POST", signal: ctrl.signal,
+      headers:{ "Content-Type":"application/json", apikey:S.supaKey, Authorization:"Bearer " + S.supaKey },
+      body: JSON.stringify({ p_username: username, p_password: password })
+    });
+    if (!r.ok) return false;
+    const rows = await r.json();
+    if (!rows.length) return false;
+    await putPeople(rows.map(x => ({
+      code: x.code, serial: x.serial, name: x.name || "", pid: x.pid || "",
+      void: !!x.void
+    })));
+    S.people = rows.length;
+    $("codeState").textContent = `${rows.length} participants loaded from the server.`;
+    return true;
+  }catch(e){ return false; }
+  finally{ clearTimeout(timer); }
+}
+
 async function volunteerLogin(){
   const username = $("loginUser").value.trim(), password = $("loginPass").value;
   const st = $("loginState");
@@ -1015,6 +1040,11 @@ async function volunteerLogin(){
         const who = await serverLogin(username, password);
         if (who){
           await rememberVolunteer(username, password, who.id, who.name);
+          // We have signal and a real volunteer: bring everything up to date
+          // while we can. Schedule and assignments, then the roll.
+          st.textContent = "Signed in. Updating this phone…";
+          await loadConfFromServer();
+          await downloadRoll(username, password);
           $("loginPass").value = "";
           return pickVolunteer(who.id, who.name);
         }
@@ -1064,6 +1094,13 @@ function pickVolunteer(id, name){
   S.volunteerId = id || "";
   S.volunteer = name;
   persistCfg();
+  if (!S.people){
+    const st = $("loginState");
+    st.textContent = "This phone has no participant list yet, so it cannot check badges. " +
+      "Log in once with signal to fetch it, or load codes.csv under ⚙.";
+    st.classList.add("bad-text");
+    return;
+  }
   drawStations();
   go("s-station");
 }
@@ -1382,7 +1419,7 @@ $("shareCfg").addEventListener("click", async () => {
   if (!S.device){ S.device = "P" + Math.random().toString(36).slice(2,7).toUpperCase(); await setMeta("device", S.device); }
 
   const cfg = await getMeta("cfg");
-  S.sessions    = cfg?.sessions    || DEFAULT_SESSIONS.slice();
+  S.sessions    = cfg?.sessions    || [];
   S.sessionDays = cfg?.sessionDays || {};
   S.assignments = cfg?.assignments || [];
   S.supaUrl     = cfg?.supaUrl     || "";
@@ -1411,10 +1448,18 @@ $("shareCfg").addEventListener("click", async () => {
   }
   checkReady();
 
-  // A phone that is already configured goes straight to "who is using this
-  // phone?", because handsets change hands between shifts and the previous
-  // volunteer's name is the wrong default.
-  if (S.people && S.sessions.length){ drawWho(); go("s-who"); }
+  // If the site told us where the server is, fetch the schedule quietly so
+  // the volunteer never sees a setup screen. Failure is fine: the login
+  // screen still shows, and a login with signal fetches it all again.
+  if (S.supaUrl && S.supaKey && !S.sessions.length) await loadConfFromServer().catch(()=>{});
+  // No server and nothing pasted: fall back to the built-in programme so the
+  // phone is at least usable, rather than showing an empty station list.
+  if (!S.sessions.length && !S.supaUrl) S.sessions = DEFAULT_SESSIONS.slice();
+
+  // Land on the login. Handsets change hands between shifts, so the previous
+  // volunteer is never the default. The settings screen is behind ⚙.
+  drawWho();
+  go("s-who");
   if ("serviceWorker" in navigator){
     navigator.serviceWorker.register("./sw.js").catch(()=>{});
     // A new version has taken over. Pick it up now if the phone is idle on a

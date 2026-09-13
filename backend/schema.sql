@@ -384,6 +384,30 @@ $$;
 revoke all on function volunteer_login(text, text) from public;
 grant execute on function volunteer_login(text, text) to anon, authenticated;
 
+-- The participant roll, for a phone that has just logged in. This is how the
+-- codes get onto a handset without anyone handling a CSV. It is gated by the
+-- volunteer's own credentials, which is the same trust the old codes.csv on
+-- the phone represented -- a leaked publishable key on its own still cannot
+-- read it. Includes pid, name and void, so a reissue done on one phone
+-- reaches every other phone the next time its volunteer logs in with signal.
+create or replace function download_roll(p_username text, p_password text)
+returns table (code text, serial int, name text, pid text, void boolean)
+language sql stable security definer set search_path = public as $$
+  select p.code, p.serial, p.name, p.pid, p.void
+  from participants p
+  where exists (
+    select 1 from volunteers v
+    where lower(v.username) = lower(trim(p_username))
+      and v.active
+      and v.pass_hash is not null
+      and v.pass_hash = extensions.crypt(p_password, v.pass_hash)
+  )
+  order by p.serial;
+$$;
+
+revoke all on function download_roll(text, text) from public;
+grant execute on function download_roll(text, text) to anon, authenticated;
+
 -- Organisers set or reset a password from the admin page. Stored bcrypt;
 -- the plain text is never written anywhere.
 create or replace function set_volunteer_password(p_id text, p_password text)
