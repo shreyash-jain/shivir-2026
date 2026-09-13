@@ -3,13 +3,15 @@
 -- Two kinds of client talk to this database and they get very different
 -- powers:
 --
---   Volunteer phones  hold the publishable key and run as `anon`. They may
---                     call ingest_scans() and ingest_links(), and read what a
---                     phone must know to work offline: the session schedule,
---                     the duty roster, and volunteer names. They cannot read
---                     the participant roll or the scans, and cannot update or
---                     delete anything. A leaked key cannot expose who is
---                     attending, erase a record, or change the schedule.
+--   Volunteer phones  hold the publishable key and run as `anon`. With the
+--                     key alone they may call ingest_scans() and
+--                     ingest_links(), and read the session schedule and the
+--                     duty roster. Everything else a phone shows -- the
+--                     participant roll, who is present and absent -- needs a
+--                     session token from volunteer_login(), so a leaked key
+--                     on its own exposes nothing personal, and deactivating a
+--                     volunteer cuts their phone off. Nothing a phone holds
+--                     can update or delete.
 --
 --   Organisers        sign in through Supabase Auth and run as
 --                     `authenticated`. Only those listed in `organisers` can
@@ -364,61 +366,121 @@ grant execute on function ingest_links(jsonb) to anon, authenticated;
 
 -- --------------------------------------------------------- volunteer login
 --
--- Phones authenticate a volunteer by calling volunteer_login(). It runs as
--- the owner so it can read pass_hash, which nothing else exposes, and hands
--- back only id and name. A wrong username and a wrong password look identical
--- from outside. There is no lockout: the key is public, so a lockout would
--- let anyone freeze a volunteer out of their phone at the door.
+-- A volunteer logs in with the username and password the admin set. The
+-- login hands back a session token; every read the phone does afterwards --
+-- the roll, attendance -- is gated by that token, never by the publishable
+-- key alone. Tokens last 30 days and die the moment the volunteer is
+-- deactivated, which is how a lost phone is dealt with.
+--
+-- A wrong username and a wrong password look identical from outside. There is
+-- no lockout: the key is public, so a lockout would let anyone freeze a
+-- volunteer out of their phone at the door.
 
+create table if not exists volunteer_sessions (
+  token        text primary key,
+  volunteer_id text not null references volunteers(id) on delete cascade,
+  created_at   timestamptz not null default now(),
+  expires_at   timestamptz not null
+);
+alter table volunteer_sessions enable row level security;   -- no policies: functions only
+
+drop function if exists volunteer_login(text, text);
 create or replace function volunteer_login(p_username text, p_password text)
-returns table (id text, name text)
-language sql stable security definer set search_path = public as $$
-  select v.id, v.name
-  from volunteers v
-  where lower(v.username) = lower(trim(p_username))
-    and v.active
-    and v.pass_hash is not null
-    and v.pass_hash = extensions.crypt(p_password, v.pass_hash);
+returns table (id text, name text, token text)
+language plpgsql security definer set search_path = public as $$
+declare
+  v volunteers%rowtype;
+begin
+  select * into v from volunteers vv
+  where lower(vv.username) = lower(trim(p_username))
+    and vv.active
+    and vv.pass_hash is not null
+    and vv.pass_hash = extensions.crypt(p_password, vv.pass_hash);
+  if not found then return; end if;
+
+  token := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+  insert into volunteer_sessions (token, volunteer_id, expires_at)
+  values (token, v.id, now() + interval '30 days');
+  -- Housekeeping: nothing older than the window needs keeping.
+  delete from volunteer_sessions where expires_at < now() - interval '7 days';
+
+  id := v.id; name := v.name;
+  return next;
+end;
 $$;
 
 revoke all on function volunteer_login(text, text) from public;
 grant execute on function volunteer_login(text, text) to anon, authenticated;
 
--- The participant roll, for a phone that has just logged in. This is how the
--- codes get onto a handset without anyone handling a CSV. It is gated by the
--- volunteer's own credentials, which is the same trust the old codes.csv on
--- the phone represented -- a leaked publishable key on its own still cannot
--- read it. Includes pid, name and void, so a reissue done on one phone
--- reaches every other phone the next time its volunteer logs in with signal.
+-- The volunteer a token belongs to, or null. Every read below starts here.
+create or replace function volunteer_for_token(p_token text)
+returns text
+language sql stable security definer set search_path = public as $$
+  select s.volunteer_id
+  from volunteer_sessions s
+  join volunteers v on v.id = s.volunteer_id
+  where s.token = p_token and s.expires_at > now() and v.active;
+$$;
+revoke all on function volunteer_for_token(text) from public;
+
+-- The participant roll, for a phone that has logged in. This is how the codes
+-- get onto a handset without anyone handling a CSV. Includes pid, name and
+-- void, so a reissue done on one phone reaches every other the next time its
+-- volunteer logs in with signal.
 --
 -- Returns ONE jsonb document, not a set of rows. PostgREST caps a set at its
 -- max-rows (1000 on Supabase) and truncates silently; a phone would then hold
--- serials 1-1000 and refuse every badge above that as "not recognised". A
--- single json value is not subject to the cap. Found with badge serial 1500.
+-- serials 1-1000 and refuse every badge above that. Found with badge 1500.
 drop function if exists download_roll(text, text);
-create or replace function download_roll(p_username text, p_password text)
+drop function if exists download_roll(text);
+create or replace function download_roll(p_token text)
 returns jsonb
 language sql stable security definer set search_path = public as $$
   select case
-    when exists (
-      select 1 from volunteers v
-      where lower(v.username) = lower(trim(p_username))
-        and v.active
-        and v.pass_hash is not null
-        and v.pass_hash = extensions.crypt(p_password, v.pass_hash)
-    )
-    then coalesce(
+    when volunteer_for_token(p_token) is null then '[]'::jsonb
+    else coalesce(
       (select jsonb_agg(jsonb_build_object(
                  'code', p.code, 'serial', p.serial, 'name', p.name,
                  'pid', p.pid, 'void', p.void) order by p.serial)
          from participants p),
       '[]'::jsonb)
-    else '[]'::jsonb
   end;
 $$;
+revoke all on function download_roll(text) from public;
+grant execute on function download_roll(text) to anon, authenticated;
 
-revoke all on function download_roll(text, text) from public;
-grant execute on function download_roll(text, text) to anon, authenticated;
+-- Everyone's scans for one day, compact: [[code, session_id, scanned_at], ...].
+-- A thousand people across seven sessions is ~7000 rows; as bare arrays that
+-- is a few hundred KB, polled every half minute only while the phone has
+-- signal and is showing an attendance tab.
+create or replace function attendance_for_day(p_token text, p_day date)
+returns jsonb
+language sql stable security definer set search_path = public as $$
+  select case
+    when volunteer_for_token(p_token) is null then '[]'::jsonb
+    else coalesce(
+      (select jsonb_agg(jsonb_build_array(s.code, s.session_id, s.scanned_at) order by s.scanned_at)
+         from scans s where s.day = p_day),
+      '[]'::jsonb)
+  end;
+$$;
+revoke all on function attendance_for_day(text, date) from public;
+grant execute on function attendance_for_day(text, date) to anon, authenticated;
+
+-- One participant across the whole event: [[day, session_id, scanned_at], ...].
+create or replace function participant_history(p_token text, p_code text)
+returns jsonb
+language sql stable security definer set search_path = public as $$
+  select case
+    when volunteer_for_token(p_token) is null then '[]'::jsonb
+    else coalesce(
+      (select jsonb_agg(jsonb_build_array(s.day, s.session_id, s.scanned_at) order by s.scanned_at)
+         from scans s where s.code = upper(p_code)),
+      '[]'::jsonb)
+  end;
+$$;
+revoke all on function participant_history(text, text) from public;
+grant execute on function participant_history(text, text) to anon, authenticated;
 
 -- Organisers set or reset a password from the admin page. Stored bcrypt;
 -- the plain text is never written anywhere.

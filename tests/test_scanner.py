@@ -119,3 +119,42 @@ def test_volunteer_login_offline_after_first_login(server, badges):
         assert "hasn't seen you" in page.inner_text("#loginState")
         assert not errors
         b.close()
+
+
+def test_attendance_tabs_count_this_phones_scans_offline(server, badges):
+    """The Sessions tab and the per-session lists must reflect what this
+    phone has scanned immediately, with no server at all -- and an unlinked
+    badge must not count as present."""
+    from browser import type_into_scanner
+    with sync_playwright() as pw:
+        b, page, errors = open_station(pw, "blank.y4m", server)
+        type_into_scanner(page, badges["paired"])            # counted
+        type_into_scanner(page, badges["unpaired"])          # refused, not counted
+        assert page.inner_text("#sessCount") == "1"
+
+        page.click("#leaveStation")
+        page.wait_for_timeout(600)
+        counts = page.inner_text("[data-counts='test-session']").lower()
+        assert "1 present" in counts, counts
+        # The roll has exactly one linked participant, so nobody is absent.
+        assert "0 absent" in counts, counts
+
+        page.click(".nav button[data-nav='sessions']")
+        page.wait_for_timeout(500)
+        assert "1 present" in page.inner_text("#sessionsList").lower()
+
+        page.click("#sessionsList .station")
+        page.wait_for_timeout(500)
+        assert "test participant" in page.inner_text("#listBody").lower()
+        page.click("[data-seg='absent']")
+        page.wait_for_timeout(300)
+        assert page.inner_text("#listBody").strip() == ""
+        page.click("#listClose")
+
+        page.click(".nav button[data-nav='people']")
+        page.fill("#peopleQ", "P001")
+        page.wait_for_timeout(500)
+        row = page.inner_text("#peopleList").lower()
+        assert "test participant" in row and "1/1 today" in row, row
+        assert not errors
+        b.close()
