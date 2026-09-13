@@ -77,7 +77,9 @@ alter table volunteers add column if not exists username  text;
 alter table volunteers add column if not exists pass_hash text;
 create unique index if not exists volunteers_username on volunteers (lower(username));
 
-create extension if not exists pgcrypto;
+-- Supabase puts extensions in their own schema, and the functions below pin
+-- search_path to public, so crypt() and gen_salt() are schema-qualified.
+create extension if not exists pgcrypto with schema extensions;
 
 -- Which volunteer is working which session on which day.
 --
@@ -376,7 +378,7 @@ language sql stable security definer set search_path = public as $$
   where lower(v.username) = lower(trim(p_username))
     and v.active
     and v.pass_hash is not null
-    and v.pass_hash = crypt(p_password, v.pass_hash);
+    and v.pass_hash = extensions.crypt(p_password, v.pass_hash);
 $$;
 
 revoke all on function volunteer_login(text, text) from public;
@@ -394,7 +396,9 @@ begin
   if length(coalesce(p_password, '')) < 4 then
     raise exception 'password must be at least 4 characters';
   end if;
-  update volunteers set pass_hash = crypt(p_password, gen_salt('bf', 8)) where volunteers.id = p_id;
+  update volunteers
+     set pass_hash = extensions.crypt(p_password, extensions.gen_salt('bf', 8))
+   where volunteers.id = p_id;
   if not found then
     raise exception 'no such volunteer';
   end if;
