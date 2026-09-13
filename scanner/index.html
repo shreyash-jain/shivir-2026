@@ -87,6 +87,22 @@ h2{font-size:17px;font-weight:600;margin:26px 0 10px}
   padding:8px 4px;border-radius:10px;color:var(--muted);font-size:11.5px;font-weight:600}
 .nav button i{font-style:normal;font-size:20px;line-height:1}
 .nav button.on{color:var(--accent);background:var(--raised)}
+.nav .fabwrap{flex:1;display:flex;justify-content:center;align-items:flex-end}
+.nav .fab{
+  width:62px;height:62px;min-width:62px;border-radius:50%;margin-top:-30px;
+  background:var(--accent);color:#06131C;font-size:26px;font-weight:700;
+  box-shadow:0 6px 18px rgba(88,184,232,.4);display:flex;align-items:center;justify-content:center;
+  border:4px solid var(--ink)
+}
+.nav .fab + span{display:block;text-align:center;font-size:11.5px;font-weight:600;color:var(--accent);margin-top:3px}
+.choice{display:flex;align-items:center;gap:12px;padding:14px;border:1px solid var(--line);
+  border-radius:12px;background:var(--surface);margin-bottom:10px;width:100%;text-align:left}
+.choice b{display:block;font-size:16px;font-weight:640}
+.choice span{color:var(--muted);font-size:13px}
+.choice i{font-style:normal;font-size:24px;width:34px;text-align:center}
+.person-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.person-card b{display:block;font-size:22px;font-weight:700;letter-spacing:-.01em}
+.person-card span{color:var(--muted);font-size:14px}
 .pane{display:none;flex:1;overflow-y:auto}
 .pane.on{display:block}
 
@@ -281,7 +297,9 @@ video{width:100%;height:100%;object-fit:cover;display:block}
   <nav class="nav">
     <button class="on" data-nav="home"><i>▤</i>My shift</button>
     <button data-nav="people"><i>☺</i>Participants</button>
+    <div class="fabwrap"><div><button class="fab" id="quickScan" aria-label="Scan a badge">⌗</button><span>Scan</span></div></div>
     <button data-nav="sessions"><i>◷</i>Sessions</button>
+    <button id="navReview"><i>≡</i>Review</button>
   </nav>
 </section>
 
@@ -332,6 +350,25 @@ video{width:100%;height:100%;object-fit:cover;display:block}
     <button class="btn" id="typeGo">Record attendance</button>
     <div style="height:8px"></div>
     <button class="btn sec" id="typeClose">Cancel</button>
+  </div>
+</div>
+
+<div class="sheet" id="choiceSheet">
+  <div class="panel">
+    <div class="grab"></div>
+    <div class="person-card"><b id="chName">—</b><span id="chMeta"></span></div>
+    <div id="chOptions"></div>
+    <button class="btn sec" id="chCancel">Scan another</button>
+  </div>
+</div>
+
+<div class="sheet" id="pickSheet">
+  <div class="panel">
+    <div class="grab"></div>
+    <h2 style="margin-top:0">Mark attendance for which session?</h2>
+    <p class="note" id="pickMeta" style="margin:0 0 12px"></p>
+    <div id="pickList"></div>
+    <button class="btn sec" id="pickCancel">Cancel</button>
   </div>
 </div>
 
@@ -606,8 +643,108 @@ async function record(raw, source){
 }
 
 async function onScan(raw, source){
-  if (S.mode === "pair") return pairScan(raw);
+  if (S.mode === "pair")   return pairScan(raw);
+  if (S.mode === "lookup") return lookupScan(raw);
+  if (S.mode === "choose") return;               // a sheet is open; ignore the camera
   return record(raw, source);
+}
+
+/* ------------------------------------------------------------------ *
+ * Quick scan — the centre button
+ *
+ * Point at any badge with no session chosen. A known badge opens a card:
+ * mark attendance (pick a session, then keep scanning into it) or see this
+ * person's history. An unlinked badge offers registration instead.
+ * ------------------------------------------------------------------ */
+let LOOKUP = { person:null, code:null };
+
+async function enterLookup(){
+  S.mode = "lookup";
+  S.session = null; S.assigned = true; S.station = "Scan";
+  $("pairPanel").classList.remove("on");
+  $("typeBtn").textContent = "Type a code";
+  $("sessName").textContent = "Scan a badge";
+  $("sessMeta").textContent = `Any badge · ${S.volunteer}`;
+  S.count = 0; $("sessCount").textContent = "";
+  go("s-scan");
+  startCamera();
+}
+
+async function lookupScan(raw){
+  const code = normalise(raw);
+  const last = S.cooldown.get(code) || 0;
+  if (Date.now() - last < 2000) return;
+  S.cooldown.set(code, Date.now());
+  if (!validCode(code)) return show("bad","✕","Not a valid badge","Check the code and try again", code || "—");
+  const person = await getPerson(code);
+  if (!person) return show("bad","✕","Badge not recognised","This code isn't on the participant list", pretty(code));
+  if (person.void) return show("bad","✕","Badge was replaced","A new badge was issued — use that one", pretty(code));
+  signal("ok");
+  LOOKUP = { person, code };
+  S.mode = "choose";
+  await openChoice(person);
+}
+
+async function openChoice(p){
+  $("chName").textContent = p.pid ? personLabel(p) : "Badge not linked";
+  $("chMeta").textContent = p.pid ? `ID ${p.pid} · badge ${pretty(p.code)}` : `Badge ${pretty(p.code)} has no participant yet`;
+  const box = $("chOptions"); box.innerHTML = "";
+  const opt = (icon, title, sub, fn) => {
+    const b = document.createElement("button");
+    b.className = "choice";
+    b.innerHTML = `<i>${icon}</i><div><b>${title}</b><span>${sub}</span></div>`;
+    b.addEventListener("click", fn);
+    box.appendChild(b);
+  };
+  if (p.pid){
+    const by = await attendanceToday();
+    const n = todaysSessions().filter(s => by.get(s.id)?.has(p.code)).length;
+    opt("✓", "Mark attendance", "Pick the session, then keep scanning into it", () => openPick(p));
+    opt("◷", `See ${personLabel(p)}'s history`, `${n} of ${todaysSessions().length} sessions today`, async () => {
+      $("choiceSheet").classList.remove("on");
+      await openPerson(p);
+    });
+  } else {
+    opt("＋", "Register this badge", "Link it to a participant at the desk", () => {
+      $("choiceSheet").classList.remove("on");
+      enterPairing().then(() => { S.pair.code = p.code; renderPair(); });
+    });
+  }
+  $("choiceSheet").classList.add("on");
+}
+
+function resumeLookup(){
+  $("choiceSheet").classList.remove("on");
+  $("pickSheet").classList.remove("on");
+  if (S.mode === "choose") S.mode = "lookup";
+}
+
+async function openPick(p){
+  $("choiceSheet").classList.remove("on");
+  const m = nowMin();
+  const mineIds = new Set(myAssignments().map(s => s.id));
+  const list = todaysSessions()
+    .map(s => ({ s, live: m >= toMin(s.start) - GRACE && m <= toMin(s.end) + GRACE, mine: mineIds.has(s.id) }))
+    .sort((a,b) => (b.mine - a.mine) || (b.live - a.live) || (toMin(a.s.start) - toMin(b.s.start)));
+  $("pickMeta").textContent = `${personLabel(p)} will be recorded into the session you pick, and the camera stays on that session.`;
+  const box = $("pickList"); box.innerHTML = "";
+  for (const { s, live, mine } of list){
+    const b = document.createElement("button");
+    b.className = "station" + (live ? "" : " idle");
+    if (!mine) b.style.borderLeftColor = "var(--warn)";
+    b.innerHTML = `<b>${s.name}</b><span>${s.venue} · ${s.start}–${s.end}${live ? " · on now" : ""}${mine ? " · yours" : ""}</span>`;
+    b.addEventListener("click", async () => {
+      $("pickSheet").classList.remove("on");
+      // Straight into the session, and the badge that got us here is recorded
+      // first -- the volunteer should not have to scan it twice.
+      await enterStation(s, mine, /*keepCamera*/ true);
+      S.cooldown.delete(p.code);
+      await record(p.code, "camera");
+    });
+    box.appendChild(b);
+  }
+  if (!list.length) box.innerHTML = `<p class="note">No sessions scheduled today.</p>`;
+  $("pickSheet").classList.add("on");
 }
 
 /* ------------------------------------------------------------------ *
@@ -1543,7 +1680,7 @@ async function enterPairing(){
   startCamera();
 }
 
-async function enterStation(session, assigned = true){
+async function enterStation(session, assigned = true, keepCamera = false){
   S.mode = "attend";
   $("pairPanel").classList.remove("on");
   $("typeBtn").textContent = "Type a code";
@@ -1557,7 +1694,7 @@ async function enterStation(session, assigned = true){
   S.count = scans.filter(s => s.sessionId === S.session.id && s.day === today()).length;
   $("sessCount").textContent = S.count;
   go("s-scan");
-  startCamera();
+  if (!keepCamera || !S.stream) startCamera();
 }
 
 async function refreshReview(){
@@ -1565,7 +1702,8 @@ async function refreshReview(){
   const links = await allLinks();
   const mine = S.mode === "pair"
     ? links.filter(l => dayOf(l.at) === today()).map(l => ({ code:l.code, at:l.at, name:l.name }))
-    : scans.filter(s => S.session && s.sessionId === S.session.id && s.day === today());
+    : S.session ? scans.filter(s => s.sessionId === S.session.id && s.day === today())
+    : scans.filter(s => s.day === today());
   $("rCount").textContent = mine.length;
   $("rQueue").innerHTML = `<span class="pill q">${scans.filter(s=>!s.sent).length + links.filter(l=>!l.sent).length}</span>`;
   $("rSent").innerHTML  = `<span class="pill s">${scans.filter(s=>s.sent).length + links.filter(l=>l.sent).length}</span>`;
@@ -1677,6 +1815,8 @@ $("typeGo").addEventListener("click", async () => {
   const raw = $("typeIn").value.trim();
   S.cooldown.delete(normalise(raw)); S.cooldown.delete(raw);
   if (S.mode === "pair") await pairScan(raw);
+  else if (S.mode === "lookup") await lookupScan(raw);
+  else if (S.mode === "choose") {}
   else await record(raw, "manual");
   $("typeIn").value = ""; $("typeSheet").classList.remove("on");
 });
@@ -1695,6 +1835,12 @@ document.querySelectorAll(".nav button").forEach(b => b.addEventListener("click"
   refreshAttendance();
 }));
 $("peopleQ").addEventListener("input", renderPeoplePane);
+$("quickScan").addEventListener("click", enterLookup);
+$("navReview").addEventListener("click", () => { refreshReview(); $("reviewSheet").classList.add("on"); });
+$("chCancel").addEventListener("click", resumeLookup);
+$("pickCancel").addEventListener("click", () => { $("pickSheet").classList.remove("on"); if (S.mode === "choose") $("choiceSheet").classList.add("on"); });
+// Closing the person sheet from a quick scan goes back to scanning.
+$("personClose").addEventListener("click", () => { if (S.mode === "choose") resumeLookup(); });
 document.querySelectorAll("[data-seg]").forEach(b => b.addEventListener("click", () => {
   LIST.seg = b.dataset.seg;
   document.querySelectorAll("[data-seg]").forEach(x => x.classList.toggle("on", x === b));

@@ -158,3 +158,40 @@ def test_attendance_tabs_count_this_phones_scans_offline(server, badges):
         assert "test participant" in row and "1/1 today" in row, row
         assert not errors
         b.close()
+
+
+def test_quick_scan_offers_attendance_or_history(server, badges):
+    """The centre Scan button: point at any badge, get the person, choose.
+    Marking attendance records that badge into the chosen session without a
+    second scan and leaves the camera on that session."""
+    from browser import open_setup, pick_volunteer
+    with sync_playwright() as pw:
+        b, page, errors = open_setup(pw, "blank.y4m", server)
+        pick_volunteer(page)
+        page.click("#quickScan")
+        page.wait_for_timeout(1200)
+        assert page.inner_text("#sessName") == "Scan a badge"
+
+        page.click("#typeBtn"); page.fill("#typeIn", badges["paired"]); page.click("#typeGo")
+        page.wait_for_selector("#choiceSheet.on", timeout=5000)
+        assert "test participant" in page.inner_text("#chName").lower()
+        opts = page.inner_text("#chOptions").lower()
+        assert "mark attendance" in opts and "history" in opts
+
+        page.click("#chOptions .choice:has-text('Mark attendance')")
+        page.wait_for_selector("#pickSheet.on", timeout=5000)
+        assert "yours" in page.inner_text("#pickList").lower()      # assigned session first
+        page.click("#pickList .station:has-text('Morning prayer')")
+        page.wait_for_timeout(800)
+
+        assert page.inner_text("#sessName") == "Morning prayer"
+        assert page.inner_text("#sessCount") == "1", "the scanned badge was not recorded into the chosen session"
+
+        # An unlinked badge offers registration instead.
+        page.click("#leaveStation"); page.wait_for_timeout(400)
+        page.click("#quickScan"); page.wait_for_timeout(800)
+        page.click("#typeBtn"); page.fill("#typeIn", badges["unpaired"]); page.click("#typeGo")
+        page.wait_for_selector("#choiceSheet.on", timeout=5000)
+        assert "register this badge" in page.inner_text("#chOptions").lower()
+        assert not errors
+        b.close()
