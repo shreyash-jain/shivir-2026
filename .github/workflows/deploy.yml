@@ -52,11 +52,15 @@ jobs:
         run: sh tools/build_site.sh dist
 
       # Needs two repository secrets:
-      #   CLOUDFLARE_API_TOKEN  - a token with the "Cloudflare Pages: Edit" permission
+      #   CLOUDFLARE_API_TOKEN  - a token with the "Workers Scripts: Edit" permission
       #   CLOUDFLARE_ACCOUNT_ID - from the Cloudflare dashboard sidebar
-      - name: Publish to Cloudflare Pages
+      #
+      # Settings -> Secrets and variables -> Actions -> New repository secret.
+      # Until both exist this step fails and the site stays on its last deploy;
+      # the tests above still run on every push.
+      - name: Publish to Cloudflare
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist --project-name=shivir-attendance --branch=main
+          command: deploy

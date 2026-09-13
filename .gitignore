@@ -27,3 +27,9 @@ app/android/app/src/main/assets/capacitor.config.json
 *.keystore
 *.jks
 dist/
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
