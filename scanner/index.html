@@ -244,12 +244,12 @@ video{width:100%;height:100%;object-fit:cover;display:block}
     </div>
   </div>
   <div class="pairPanel" id="pairPanel">
-    <div class="slot" id="slotBadge">
-      <div class="n">1</div><div class="t"><b>Scan the badge</b><span>The QR on their ID card</span></div>
-    </div>
-    <div class="slot" id="slotPid">
-      <div class="n">2</div><div class="t"><b>Scan or type their participant ID</b><span>From the registration list</span></div>
-    </div>
+    <button class="slot" id="slotBadge" style="width:100%;text-align:left">
+      <div class="n">1</div><div class="t"><b>Scan the badge</b><span>The QR on their ID card — or tap to type it</span></div>
+    </button>
+    <button class="slot" id="slotPid" style="width:100%;text-align:left">
+      <div class="n">2</div><div class="t"><b>Scan or type their participant ID</b><span>Tap here to type it</span></div>
+    </button>
     <input id="pairName" placeholder="Participant name" style="margin-bottom:10px;display:none">
     <div class="row">
       <button class="btn sec" id="pairClear" style="flex:1">Clear</button>
@@ -542,11 +542,11 @@ function renderPair(){
   const b = $("slotBadge"), p = $("slotPid");
   b.className = "slot" + (S.pair.code ? " done" : "");
   b.querySelector("b").textContent = S.pair.code ? pretty(S.pair.code) : "Scan the badge";
-  b.querySelector("span").textContent = S.pair.code ? "Badge ready to link" : "The QR on their ID card";
+  b.querySelector("span").textContent = S.pair.code ? "Badge ready to link" : "The QR on their ID card — or tap to type it";
 
   p.className = "slot" + (S.pair.pid ? " done" : "");
-  p.querySelector("b").textContent = S.pair.pid || "Scan or type their participant ID";
-  p.querySelector("span").textContent = !S.pair.pid ? "From the registration list"
+  p.querySelector("b").textContent = S.pair.pid || (S.pair.code ? "Now their participant ID" : "Scan or type their participant ID");
+  p.querySelector("span").textContent = !S.pair.pid ? "Tap here to type it, or scan it"
     : S.pair.known && S.pair.known.code !== S.pair.code
       ? `Already holds badge ${pretty(S.pair.known.code)} — saving will void it`
       : (S.pair.name || "Not on the list — type their name below");
@@ -556,6 +556,9 @@ function renderPair(){
   el.style.display = needName ? "block" : "none";
   if (!needName) el.value = S.pair.name || "";
   $("pairSave").disabled = !(S.pair.code && S.pair.pid);
+  $("typeBtn").textContent = !S.pair.code ? "Type badge code"
+                           : !S.pair.pid  ? "Type participant ID"
+                           : "Type badge or ID";
   $("pairSave").textContent = S.pair.known && S.pair.known.code !== S.pair.code
     ? "Replace their badge" : "Link badge";
 }
@@ -804,7 +807,7 @@ function persistCfg(){
     sessions:S.sessions, sessionDays:S.sessionDays,
     assignments:S.assignments,
     supaUrl:S.supaUrl, supaKey:S.supaKey,
-    volunteer:S.volunteer, volunteerId:S.volunteerId
+    volunteer:S.volunteer, volunteerId:S.volunteerId, loginDay:S.loginDay
   });
 }
 
@@ -1104,6 +1107,7 @@ async function drawWho(){
 function pickVolunteer(id, name){
   S.volunteerId = id || "";
   S.volunteer = name;
+  S.loginDay = today();          // a login lasts for the day on this phone
   persistCfg();
   if (!S.people){
     const st = $("loginState");
@@ -1301,7 +1305,11 @@ $("loadConf").addEventListener("click", loadConfFromServer);
 $("startBtn").addEventListener("click", () => { persistCfg(); drawWho(); go("s-who"); });
 $("backSetup").addEventListener("click", () => go("s-setup"));
 $("whoBack").addEventListener("click", () => go("s-setup"));
-$("changeWho").addEventListener("click", () => { drawWho(); go("s-who"); });
+$("changeWho").addEventListener("click", () => {
+  S.volunteer = ""; S.volunteerId = ""; S.loginDay = "";   // explicit log out
+  persistCfg();
+  drawWho(); go("s-who");
+});
 $("loginGo").addEventListener("click", volunteerLogin);
 $("loginPass").addEventListener("keydown", e => { if (e.key === "Enter") volunteerLogin(); });
 $("showOther").addEventListener("click", () => {
@@ -1313,6 +1321,15 @@ $("showOther").addEventListener("click", () => {
 $("leaveStation").addEventListener("click", () => { stopCamera(); drawStations(); go("s-station"); });
 
 $("typeBtn").addEventListener("click", () => { $("typeSheet").classList.add("on"); $("typeIn").focus(); });
+new MutationObserver(() => {
+  if (!$("typeSheet").classList.contains("on")) return;
+  const h = $("typeSheet").querySelector("h2");
+  h.textContent = S.mode !== "pair" ? "Type the code on the badge"
+    : !S.pair.code ? "Type the badge code"
+    : !S.pair.pid  ? "Type their participant ID"
+    : "Type a badge code or participant ID";
+  $("typeGo").textContent = S.mode !== "pair" ? "Record attendance" : "Use this";
+}).observe($("typeSheet"), { attributes:true, attributeFilter:["class"] });
 $("typeClose").addEventListener("click", () => $("typeSheet").classList.remove("on"));
 $("typeIn").addEventListener("input", () => {
   const el = $("typeIn");
@@ -1338,6 +1355,10 @@ $("typeGo").addEventListener("click", async () => {
   $("typeIn").value = ""; $("typeSheet").classList.remove("on");
 });
 $("pairClear").addEventListener("click", clearPair);
+// Tapping a step opens the keyboard for that step.
+const openType = () => { $("typeSheet").classList.add("on"); $("typeIn").focus(); };
+$("slotBadge").addEventListener("click", () => { if (!S.pair.code) openType(); });
+$("slotPid").addEventListener("click", () => { if (!S.pair.pid) openType(); });
 $("pairSave").addEventListener("click", savePair);
 $("pairName").addEventListener("input", () => { S.pair.name = $("pairName").value.trim(); $("pairSave").disabled = !(S.pair.code && S.pair.pid); });
 
@@ -1437,6 +1458,7 @@ $("shareCfg").addEventListener("click", async () => {
   S.supaKey     = cfg?.supaKey     || "";
   S.volunteer   = cfg?.volunteer   || "";
   S.volunteerId = cfg?.volunteerId || "";
+  S.loginDay    = cfg?.loginDay    || "";
 
   const pendingCfg = location.hash.startsWith("#cfg=") ? location.hash.slice(5) : "";
   if (pendingCfg) history.replaceState(null, "", location.pathname);
@@ -1467,10 +1489,18 @@ $("shareCfg").addEventListener("click", async () => {
   // phone is at least usable, rather than showing an empty station list.
   if (!S.sessions.length && !S.supaUrl) S.sessions = DEFAULT_SESSIONS.slice();
 
-  // Land on the login. Handsets change hands between shifts, so the previous
-  // volunteer is never the default. The settings screen is behind ⚙.
-  drawWho();
-  go("s-who");
+  // A login lasts for the day on this phone, so a refresh -- or the reload
+  // the app does itself to pick up an update -- goes straight back to the
+  // volunteer's sessions. Tomorrow, or after ⇄, it asks again: handsets
+  // change hands between shifts and yesterday's volunteer is the wrong
+  // default. The settings screen is behind ⚙.
+  if (S.volunteer && S.loginDay === today() && S.people && S.sessions.length){
+    drawStations();
+    go("s-station");
+  } else {
+    drawWho();
+    go("s-who");
+  }
   if ("serviceWorker" in navigator){
     navigator.serviceWorker.register("./sw.js").catch(()=>{});
     // A new version has taken over. Pick it up now if the phone is idle on a
