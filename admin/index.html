@@ -913,15 +913,18 @@ $("rollFile").addEventListener("change", async e => {
     if (!confirm(`Load ${rows.length.toLocaleString()} codes into the server?\n\n` +
                  `Codes already there are left untouched.`)) return;
     const CHUNK = 500;
+    let ins = 0, skip = 0, rej = 0;
     for (let i = 0; i < rows.length; i += CHUNK){
       note.textContent = `Loading… ${Math.min(i + CHUNK, rows.length).toLocaleString()} of ${rows.length.toLocaleString()}`;
-      // ignore-duplicates, never merge: a re-import must not undo a pairing
-      // or un-void a reissued badge. New codes are added, nothing else moves.
-      await write("POST", "/participants", rows.slice(i, i + CHUNK),
-                  "resolution=ignore-duplicates,return=minimal");
+      // Through load_participants(): existing codes are left exactly as they
+      // are, so a re-import never undoes a pairing or un-voids a reissue.
+      const res = await write("POST", "/rpc/load_participants", { rows: rows.slice(i, i + CHUNK) });
+      const [out] = await res.json();
+      ins += out.inserted; skip += out.skipped; rej += out.rejected;
     }
     await renderRoll();
-    note.textContent = `Done. ${rows.length.toLocaleString()} codes in the file; the server now holds ${$("rollCount").textContent}.`;
+    note.textContent = `Done. ${ins.toLocaleString()} added, ${skip.toLocaleString()} already there` +
+      (rej ? `, ${rej} rejected` : "") + `. The server now holds ${$("rollCount").textContent}.`;
     toast("Roll loaded.");
   }catch(err){
     note.textContent = err.message;

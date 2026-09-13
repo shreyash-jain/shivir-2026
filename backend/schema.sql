@@ -435,19 +435,54 @@ create policy "organisers write assignments"
   on assignments for all to authenticated
   using (is_organiser()) with check (is_organiser());
 
--- The roll is loaded from codes_master.csv through the admin page. Insert
--- and update only -- there is deliberately no delete: a participant row with
--- scans hanging off it must not vanish, and a wrong pairing is fixed by a
--- reissue, which leaves a trace.
+-- Organisers may correct a participant row (a name, a typo in a pid). There
+-- is deliberately no delete: a participant row with scans hanging off it
+-- must not vanish, and a wrong pairing is fixed by a reissue, which leaves a
+-- trace.
 drop policy if exists "organisers load participants" on participants;
-create policy "organisers load participants"
-  on participants for insert to authenticated
-  with check (is_organiser());
-
 drop policy if exists "organisers amend participants" on participants;
 create policy "organisers amend participants"
   on participants for update to authenticated
   using (is_organiser()) with check (is_organiser());
+
+-- Loading the roll from codes_master.csv. A function, for the same reason as
+-- ingest_scans(): the upload has to be repeatable, repeatable means
+-- ON CONFLICT DO NOTHING, and ON CONFLICT under RLS is a trap. Existing rows
+-- are never touched -- re-loading the file must not undo a pairing or
+-- un-void a reissued badge. Only organisers may call it, checked inside.
+create or replace function load_participants(rows jsonb)
+returns table (inserted int, skipped int, rejected int)
+language plpgsql security definer set search_path = public as $$
+declare
+  r jsonb;
+begin
+  if not is_organiser() then
+    raise exception 'not an organiser' using errcode = '42501';
+  end if;
+  if jsonb_typeof(rows) <> 'array' then
+    raise exception 'rows must be a JSON array';
+  end if;
+
+  inserted := 0; skipped := 0; rejected := 0;
+  for r in select * from jsonb_array_elements(rows) loop
+    begin
+      insert into participants (code, serial, name, pid)
+      values (r->>'code',
+              nullif(r->>'serial', '')::int,
+              nullif(r->>'name', ''),
+              nullif(r->>'pid', ''))
+      on conflict (code) do nothing;
+      if found then inserted := inserted + 1; else skipped := skipped + 1; end if;
+    exception when others then
+      rejected := rejected + 1;
+    end;
+  end loop;
+  return next;
+end;
+$$;
+
+revoke all on function load_participants(jsonb) from public;
+grant execute on function load_participants(jsonb) to authenticated;
 
 -- ---------------------------------------------------------------- reporting
 --
