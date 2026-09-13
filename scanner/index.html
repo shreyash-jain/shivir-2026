@@ -826,7 +826,7 @@ async function loadServerDetails(){
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 8000);
   try{
-    const r = await fetch("./config.json", { cache:"no-store", signal:ctrl.signal });
+    const r = await fetch("/config.json", { cache:"no-store", signal:ctrl.signal });
     if (!r.ok) return false;
     const c = await r.json();
     if (!c.supaUrl || !c.supaKey) return false;

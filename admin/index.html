@@ -127,14 +127,19 @@ tr.gap td{background:rgba(229,72,77,.09)}
     <div class="card login">
       <h1>Attendance admin</h1>
       <p class="sub">Organiser sign-in.</p>
-      <div class="field">
-        <label for="url">Project URL</label>
-        <input id="url" placeholder="https://xxxx.supabase.co" inputmode="url" autocapitalize="off" spellcheck="false">
-      </div>
-      <div class="field">
-        <label for="key">Publishable key</label>
-        <input id="key" placeholder="sb_publishable_…" autocapitalize="off" spellcheck="false">
-      </div>
+      <details id="serverBox" style="margin-bottom:12px">
+        <summary class="note" id="serverSummary" style="cursor:pointer">Server details</summary>
+        <div style="margin-top:10px">
+          <div class="field">
+            <label for="url">Project URL</label>
+            <input id="url" placeholder="https://xxxx.supabase.co" inputmode="url" autocapitalize="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label for="key">Publishable key</label>
+            <input id="key" placeholder="sb_publishable_…" autocapitalize="off" spellcheck="false">
+          </div>
+        </div>
+      </details>
       <div class="field">
         <label for="email">Email</label>
         <input id="email" type="email" autocomplete="username" autocapitalize="off">
@@ -1145,15 +1150,27 @@ async function start(){
 
   // Where this is hosted, the project URL and key come from the Cloudflare
   // environment, so an organiser only ever types an email and a password.
-  if (!$("url").value || !$("key").value){
-    try{
-      const r = await fetch("./config.json", { cache:"no-store" });
-      if (r.ok){
-        const c = await r.json();
-        if (c.supaUrl && !$("url").value) $("url").value = c.supaUrl;
-        if (c.supaKey && !$("key").value) $("key").value = c.supaKey;
+  // Absolute path: this page lives under /admin/ and the route is at the root.
+  let hosted = false;
+  try{
+    const r = await fetch("/config.json", { cache:"no-store" });
+    if (r.ok){
+      const c = await r.json();
+      if (c.supaUrl && c.supaKey){
+        $("url").value = c.supaUrl;
+        $("key").value = c.supaKey;
+        hosted = true;
       }
-    }catch(e){}
+    }
+  }catch(e){}
+
+  const box = $("serverBox");
+  if (hosted){
+    box.open = false;
+    $("serverSummary").textContent = "Server: " + new URL($("url").value).host + " (from hosting — change)";
+  } else {
+    box.open = true;
+    $("serverSummary").textContent = "Server details";
   }
 
   ($("url").value && $("key").value
