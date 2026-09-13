@@ -2,9 +2,9 @@
 
 A Capacitor shell around `../scanner`. It adds no code to the app — the APK
 contains the same `index.html`, `jsQR.min.js` and `sw.js` that the web version
-serves, copied in at build time. `webDir` points straight at `../scanner`, so
-there is no second copy to keep in step and no build step for the scanner
-itself.
+serves. `build_www.sh` copies them into `www/` at build time and adds one
+file, `config.json`, with the server details. Nothing is compiled or
+bundled; there is no build step for the scanner itself.
 
 ## Why bother, when the PWA already works offline
 
@@ -84,20 +84,21 @@ otherwise the release variant builds unsigned and Android refuses it.
 
 ## Setting up fifty phones
 
-The `#cfg=` setup **link** does not work inside the app: it loads from
-`https://localhost` and there is no address bar to paste into. So the setup
-screen also has **Copy setup for other phones** and **Paste setup from another
-phone**, which move the same payload as bare text — it travels fine over
-WhatsApp or a group chat.
+Install the APK, open it, log in. That is the whole procedure, provided the
+first login on each phone happens **with signal** — do it at base camp on
+wifi. The app already knows the server (baked in), fetches the schedule and
+assignments on open, and downloads the participant roll with the volunteer's
+login. After that the phone works with no network, and the same volunteer can
+log in again on it offline.
 
-Configure one phone fully, tap *Copy setup for other phones*, send the string
-to the volunteers, and each of them taps *Paste setup from another phone*. That
-carries the session list and the Supabase URL and publishable key. Only the
-volunteer's own name is left to fill in.
+The fallback screen behind ⚙ (**Paste setup from the admin**, load a CSV) is
+for a phone that cannot reach the server at all. The `#cfg=` setup *link*
+does not work inside the app — it loads from `https://localhost` — so the
+same payload is accepted as pasted text.
 
-The publishable key is safe to pass around like this — it is designed to be
-public and RLS is what protects the data. See the security model in
-`CLAUDE.md`.
+Rotating the Supabase key: set the new secret in Cloudflare (see `DEPLOY.md`),
+rebuild the APK so new installs get it, and existing installs pick it up in
+the background the next time they open with signal.
 
 ## Gotchas worth knowing
 
