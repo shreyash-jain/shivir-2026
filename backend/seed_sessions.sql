@@ -97,10 +97,13 @@ commit;
 -- ---------------------------------------------------------------------------
 -- Keeping the phones in step
 --
--- The scanner does not read this table; it carries its own copy so it works
--- with no signal. After editing the schedule here, open the scanner setup
--- screen, make the same edits, and use "Copy setup link for other phones" --
--- that link carries the sessions, so one paste configures every handset.
--- A mismatch is not fatal: the scan records the session id the phone chose,
--- and a session id the database has never heard of still inserts, because
--- scans.session_id deliberately has no foreign key to sessions.
+-- Phones download this table once at setup ("Load from the server") and then
+-- carry their own copy so they work with no signal. After editing the
+-- schedule -- here or on the /admin Calendar tab -- a phone picks the change
+-- up the next time it loads at base camp. A mismatch is not fatal: the scan
+-- records the session id the phone chose, and a session id the database has
+-- never heard of still inserts, because scans.session_id deliberately has no
+-- foreign key to sessions.
+--
+-- This file is a starting point. Day to day, the schedule is edited on the
+-- /admin page, not by re-running this.

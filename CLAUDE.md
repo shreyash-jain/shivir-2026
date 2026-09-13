@@ -72,9 +72,19 @@ QR sparse and fast to read.
   (`code|session_id|day`) so retries are idempotent.
 - The participant list lives on the phone. The app fetches `codes.csv` once
   on setup over wifi and then never needs the network again.
-- Uploads use `Prefer: resolution=ignore-duplicates`. A phone cannot tell
-  "the server never got it" from "the response never came back", so a retry
-  must be a silent no-op.
+- A retry must be a silent no-op. A phone cannot tell "the server never got
+  it" from "the response never came back". Uploads therefore go through
+  `ingest_scans()` / `ingest_links()`, `security definer` functions that do
+  `ON CONFLICT DO NOTHING` as the table owner and return a verdict per row.
+  **Do not switch this back to a plain insert with
+  `Prefer: resolution=ignore-duplicates`.** That header becomes
+  `ON CONFLICT`, which under RLS needs a SELECT policy on `scans` — and the
+  phones must never have one, because readable scans are a list of every
+  valid badge code. Verified against the live project: the direct insert
+  returned 42501 with the header and only worked without it.
+- Per-row verdicts also mean one refused row (a code not on the roll) does not
+  block the other 199 in its batch. The phone marks that row `rejected`, keeps
+  it for the CSV export, and never re-sends it.
 - Network calls need an explicit timeout. A fetch on a network that accepts
   the connection then goes silent hangs forever and, behind a `syncing`
   guard, freezes the queue for the rest of the day.
@@ -89,21 +99,36 @@ miss. There is a regression test for this; keep it.
 
 ## Session matching
 
-Sessions are `(id, name, venue, start, end)` with a 20-minute grace window
-either side. A volunteer picks their station at the start of a shift, and the
-app defaults to the session active at that venue right now, with an override.
+Sessions are `(id, name, venue, start, end)`, shared across all days, with
+`session_days` saying which days each one runs. A scan is attributed to the
+session **the volunteer was assigned to** by the admin, for that day. At the
+start of a shift the volunteer taps their own name and sees their sessions.
 
-Do not attribute scans purely by clock time. Sessions run late and windows
-overlap, and pure time-matching silently files hundreds of scans under the
-wrong event.
+Do not attribute scans by venue and clock time. Sessions run late, windows
+overlap, and two sessions can run at once — venue+clock cannot separate them
+and silently files hundreds of scans under the wrong event. `activeAt(venue)`
+was removed for this reason; do not reintroduce it. A volunteer can still
+scan a session they were not assigned to, behind a confirm, and the scan is
+recorded with `assigned = false` so the count can be explained.
 
 ## Security model
 
 Volunteer phones hold the Supabase publishable key, which is designed to be
-public but only safe with RLS on. Phones get exactly one capability: insert
-into `scans`. They cannot read the participant roll, update or delete.
-`scans.code` has a foreign key to `participants(code)` so the database
-rejects codes that were never issued, matching the check on the phone.
+public but only safe with RLS on. Phones can call `ingest_scans()` and
+`ingest_links()`, and read the schedule, the duty roster and volunteer names
+(what a phone needs to work offline). They cannot read the participant roll
+or the scans, and cannot update or delete anything. `scans.code` has a
+foreign key to `participants(code)` so the database rejects codes that were
+never issued, matching the check on the phone.
+
+The publishable key is served to the apps from `/config.json` by a one-route
+Cloudflare Worker reading encrypted secrets; rotating it is an edit in the
+Cloudflare dashboard. The `service_role` key must never go there — that route
+is public by design.
+
+Organisers sign in through Supabase Auth and must also be listed in
+`organisers`. They configure the event (sessions, calendar, volunteers,
+assignments), load the roll, and read everything.
 
 ## Style
 

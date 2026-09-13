@@ -4,12 +4,12 @@
 -- powers:
 --
 --   Volunteer phones  hold the publishable key and run as `anon`. They may
---                     insert scans and insert badge links, and read what a
+--                     call ingest_scans() and ingest_links(), and read what a
 --                     phone must know to work offline: the session schedule,
 --                     the duty roster, and volunteer names. They cannot read
---                     the participant roll and cannot update or delete
---                     anything. A leaked key cannot expose who is attending,
---                     erase a record, or change the schedule.
+--                     the participant roll or the scans, and cannot update or
+--                     delete anything. A leaked key cannot expose who is
+--                     attending, erase a record, or change the schedule.
 --
 --   Organisers        sign in through Supabase Auth and run as
 --                     `authenticated`. Only those listed in `organisers` can
@@ -202,17 +202,11 @@ alter table volunteers   enable row level security;
 alter table assignments  enable row level security;
 alter table badge_links  enable row level security;
 
--- Phones may add scans and badge links and nothing else. No select, no
--- update, no delete.
+-- Phones do NOT insert into scans or badge_links directly. They call the
+-- ingest_* functions below. An earlier version had plain insert policies
+-- here; they are dropped so that the functions are the only door in.
 drop policy if exists "devices insert scans" on scans;
-create policy "devices insert scans"
-  on scans for insert to anon
-  with check (true);
-
 drop policy if exists "devices insert links" on badge_links;
-create policy "devices insert links"
-  on badge_links for insert to anon
-  with check (true);
 
 -- Session times are harmless to read and let phones pick up schedule changes.
 drop policy if exists "read sessions" on sessions;
@@ -247,6 +241,117 @@ grant select on volunteer_roster to anon, authenticated;
 -- The foreign key on scans.code still rejects codes that were never issued.
 -- volunteers is shut for the same reason; volunteer_roster is the narrow
 -- window into it.
+
+-- ------------------------------------------------------------ ingestion
+--
+-- Why a function and not an insert policy.
+--
+-- A phone cannot tell "the server never got it" from "the reply never came
+-- back", so every upload must be safe to repeat. The obvious way is
+-- PostgREST's `Prefer: resolution=ignore-duplicates`, which becomes
+-- INSERT ... ON CONFLICT DO NOTHING. Under row-level security that path
+-- needs a SELECT policy on the table, and the phones must never have one:
+-- readable scans are a list of every valid badge code, and a valid code is a
+-- printable badge. Tested against the live project -- the direct insert
+-- returned 42501 with the header and only worked without it.
+--
+-- So the phones get one capability: call these. They run as the table owner,
+-- do the conflict handling themselves, and hand back a verdict per row. That
+-- also means one bad row no longer poisons the other 199 in its batch -- the
+-- phone is told exactly which uuid was refused and why, marks that one as
+-- rejected, and moves on.
+--
+-- Statuses: 'ok' inserted; 'duplicate' already there (a retry, or the same
+-- badge scanned twice into one session on two phones); 'rejected' a code
+-- that was never issued, or a malformed row.
+
+create or replace function ingest_scans(rows jsonb)
+returns table (uuid uuid, status text, detail text)
+language plpgsql security definer set search_path = public as $$
+declare
+  r jsonb;
+begin
+  if jsonb_typeof(rows) <> 'array' then
+    raise exception 'rows must be a JSON array';
+  end if;
+
+  for r in select * from jsonb_array_elements(rows) loop
+    uuid := null; status := null; detail := null;
+    begin
+      uuid := (r->>'uuid')::uuid;
+      insert into scans
+        (uuid, dedupe, code, session_id, session_name, venue, scanned_at, day,
+         volunteer, volunteer_id, device, source, assigned)
+      values
+        (uuid,
+         r->>'dedupe',
+         r->>'code',
+         r->>'session_id',
+         r->>'session_name',
+         r->>'venue',
+         (r->>'scanned_at')::timestamptz,
+         (r->>'day')::date,
+         r->>'volunteer',
+         r->>'volunteer_id',
+         r->>'device',
+         r->>'source',
+         (r->>'assigned')::boolean)
+      on conflict do nothing;
+      status := case when found then 'ok' else 'duplicate' end;
+    exception
+      when foreign_key_violation then
+        status := 'rejected'; detail := 'code was never issued';
+      when others then
+        status := 'rejected'; detail := sqlerrm;
+    end;
+    return next;
+  end loop;
+end;
+$$;
+
+create or replace function ingest_links(rows jsonb)
+returns table (uuid uuid, status text, detail text)
+language plpgsql security definer set search_path = public as $$
+declare
+  r jsonb;
+begin
+  if jsonb_typeof(rows) <> 'array' then
+    raise exception 'rows must be a JSON array';
+  end if;
+
+  for r in select * from jsonb_array_elements(rows) loop
+    uuid := null; status := null; detail := null;
+    begin
+      uuid := (r->>'uuid')::uuid;
+      insert into badge_links
+        (uuid, code, pid, name, replaces, linked_at, volunteer, device)
+      values
+        (uuid,
+         r->>'code',
+         r->>'pid',
+         r->>'name',
+         r->>'replaces',
+         (r->>'linked_at')::timestamptz,
+         r->>'volunteer',
+         r->>'device')
+      on conflict do nothing;
+      status := case when found then 'ok' else 'duplicate' end;
+    exception
+      when foreign_key_violation then
+        status := 'rejected'; detail := 'code was never issued';
+      when others then
+        status := 'rejected'; detail := sqlerrm;
+    end;
+    return next;
+  end loop;
+end;
+$$;
+
+-- Callable by phones and by nobody else who is not already trusted.
+revoke all on function ingest_scans(jsonb) from public;
+revoke all on function ingest_links(jsonb) from public;
+grant execute on function ingest_scans(jsonb) to anon, authenticated;
+grant execute on function ingest_links(jsonb) to anon, authenticated;
 
 -- ------------------------------------------------------------- organisers
 --
@@ -328,6 +433,20 @@ create policy "organisers write volunteers"
 drop policy if exists "organisers write assignments" on assignments;
 create policy "organisers write assignments"
   on assignments for all to authenticated
+  using (is_organiser()) with check (is_organiser());
+
+-- The roll is loaded from codes_master.csv through the admin page. Insert
+-- and update only -- there is deliberately no delete: a participant row with
+-- scans hanging off it must not vanish, and a wrong pairing is fixed by a
+-- reissue, which leaves a trace.
+drop policy if exists "organisers load participants" on participants;
+create policy "organisers load participants"
+  on participants for insert to authenticated
+  with check (is_organiser());
+
+drop policy if exists "organisers amend participants" on participants;
+create policy "organisers amend participants"
+  on participants for update to authenticated
   using (is_organiser()) with check (is_organiser());
 
 -- ---------------------------------------------------------------- reporting

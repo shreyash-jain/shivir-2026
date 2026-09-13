@@ -699,27 +699,32 @@ function linkRow(l){
   };
 }
 
-async function postBatch(table, rows){
+/* Uploads go through ingest_scans() / ingest_links() on the server rather
+   than a plain insert. A retry after a dropped response must be a no-op, and
+   the phone cannot tell "never arrived" from "reply never came back"; the
+   function does the duplicate handling as the table owner and returns a
+   verdict per row, so one bad row cannot poison the rest of its batch. */
+async function postBatch(fn, rows){
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), TIMEOUT);
   try{
-    const res = await fetch(S.supaUrl.replace(/\/+$/,"") + "/rest/v1/" + table, {
+    const res = await fetch(S.supaUrl.replace(/\/+$/,"") + "/rest/v1/rpc/" + fn, {
       method: "POST",
       signal: ctrl.signal,
       headers: {
         "Content-Type": "application/json",
         "apikey": S.supaKey,
-        "Authorization": "Bearer " + S.supaKey,
-        // A retry after a dropped response must be a no-op, not an error.
-        // The phone cannot tell "never arrived" from "reply never came back".
-        "Prefer": "resolution=ignore-duplicates,return=minimal"
+        "Authorization": "Bearer " + S.supaKey
       },
-      body: JSON.stringify(rows)
+      body: JSON.stringify({ rows })
     });
-    if (res.ok) return { ok:true };
+    if (res.ok){
+      const verdicts = await res.json().catch(() => []);
+      return { ok:true, verdicts: Array.isArray(verdicts) ? verdicts : [] };
+    }
 
-    // 4xx means these rows will never be accepted — retrying forever would
-    // wedge the queue behind them, so surface it instead of looping.
+    // 4xx means the request itself will never be accepted — retrying forever
+    // would wedge the queue behind it, so surface it instead of looping.
     const permanent = res.status >= 400 && res.status < 500 && res.status !== 429;
     return { ok:false, permanent, status:res.status, detail: await res.text().catch(()=> "") };
   }catch(e){
@@ -734,17 +739,26 @@ let lastSyncError = "";
 
 /* Push one store's backlog. Stops at the first failure so that rows keep
    their order and the next tick picks up where this one left off. */
-async function drain(table, rows, store, toRow){
+async function drain(fn, rows, store, toRow){
   for (let i = 0; i < rows.length; i += BATCH){
     const chunk = rows.slice(i, i + BATCH);
-    const r = await postBatch(table, chunk.map(toRow));
+    const r = await postBatch(fn, chunk.map(toRow));
     if (!r.ok){
       lastSyncError = r.permanent
-        ? `Server rejected ${chunk.length} records (${r.status}). They are still saved on this phone.`
+        ? `Server refused the upload (${r.status}). Everything is still saved on this phone.`
         : "No connection. Everything is saved and will send later.";
       return false;
     }
-    for (const x of chunk){ x.sent = 1; await tx(store,"readwrite", st => st.put(x)); }
+    // Every row the server answered for is settled -- inserted, already
+    // there, or refused for good. None of them should be sent again. A
+    // refused row keeps its reason so the CSV export still shows it.
+    const verdict = new Map(r.verdicts.map(v => [String(v.uuid), v]));
+    for (const x of chunk){
+      const v = verdict.get(x.uuid);
+      x.sent = 1;
+      if (v && v.status === "rejected") x.rejected = v.detail || "rejected";
+      await tx(store,"readwrite", st => st.put(x));
+    }
   }
   return true;
 }
@@ -759,8 +773,8 @@ async function sync(){
     const links = (await allLinks()).filter(l => !l.sent);
     const scans = (await allScans()).filter(s => !s.sent);
     let ok = true;
-    if (links.length) ok = await drain("badge_links", links, "links", linkRow);
-    if (ok && scans.length) ok = await drain("scans", scans, "scans", scanRow);
+    if (links.length) ok = await drain("ingest_links", links, "links", linkRow);
+    if (ok && scans.length) ok = await drain("ingest_scans", scans, "scans", scanRow);
     if (ok) lastSyncError = "";
   }catch(e){
     lastSyncError = "Sync failed. Everything is safe on this phone.";
@@ -1096,13 +1110,17 @@ async function refreshReview(){
   // scans are being rejected and nobody knows".
   const st = $("syncState");
   const waiting = scans.filter(s=>!s.sent).length + links.filter(l=>!l.sent).length;
+  // Refusals are read back from the rows themselves, not from a counter, so
+  // the message survives the next successful sync instead of being wiped by it.
+  const refused = scans.filter(s=>s.rejected).length + links.filter(l=>l.rejected).length;
   st.textContent = !S.supaUrl || !S.supaKey
       ? "No server configured — export the CSV at the end of the day."
     : lastSyncError ? lastSyncError
+    : refused ? `Server refused ${refused} record${refused === 1 ? "" : "s"} — badge not on the roll. Kept on this phone; see the CSV export.`
     : !navigator.onLine ? "No signal. Everything is saved and will send later."
     : waiting ? "Sending…"
     : "Everything on this phone has been sent.";
-  st.classList.toggle("bad-text", !!lastSyncError);
+  st.classList.toggle("bad-text", !!lastSyncError || refused > 0);
   const log = $("rLog"); log.innerHTML = "";
   for (const s of mine.slice(-40).reverse()){
     const p = await getPerson(s.code);
@@ -1115,13 +1133,14 @@ async function refreshReview(){
 
 function exportCsv(){
   allScans().then(async scans => {
-    const head = "code,participant_id,name,session_id,session,venue,scanned_at,day,volunteer,device,source\n";
+    const head = "code,participant_id,name,session_id,session,venue,scanned_at,day,volunteer,device,source,sent,rejected\n";
     const lines = [];
     for (const s of scans){
       const p = await getPerson(s.code);
       lines.push([s.code, s.pid || p?.pid || "", `"${(s.name || p?.name || "").replace(/"/g,'""')}"`,
                   s.sessionId, s.sessionName, s.venue, s.at, s.day,
-                  s.volunteer, s.device, s.source].join(","));
+                  s.volunteer, s.device, s.source, s.sent ? 1 : 0,
+                  `"${(s.rejected || "").replace(/"/g,'""')}"`].join(","));
     }
     const blob = new Blob([head + lines.join("\n")], { type:"text/csv" });
     const a = document.createElement("a");

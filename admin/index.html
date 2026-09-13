@@ -173,6 +173,7 @@ tr.gap td{background:rgba(229,72,77,.09)}
       <button class="tab" data-tab="calendar">Calendar</button>
       <button class="tab" data-tab="volunteers">Volunteers</button>
       <button class="tab" data-tab="assign">Assignments</button>
+      <button class="tab" data-tab="roll">Roll</button>
       <button class="tab" data-tab="export">Export</button>
     </div>
 
@@ -304,6 +305,27 @@ tr.gap td{background:rgba(229,72,77,.09)}
         Nothing scheduled for this day. Add sessions and tick them on the Calendar tab.
       </p>
       <p class="note" id="assignNote"></p>
+    </div>
+
+    <!-- ---------------- ROLL ---------------- -->
+    <div class="tabpane" data-pane="roll">
+      <p class="hint">
+        The badge codes the printer produced. Every scan is checked against this
+        list on the server — <b>until it is loaded, every scan is refused</b> as
+        a code that was never issued. Load <span class="mono">codes_master.csv</span>
+        from the generator. Loading it again is safe: codes already present are
+        left exactly as they are, so a badge that has since been paired or
+        reissued is never reset.
+      </p>
+      <div class="tiles" style="margin-bottom:18px">
+        <div class="tile"><div class="k">Codes on the server</div><div class="v" id="rollCount">—</div></div>
+        <div class="tile"><div class="k">Linked to a person</div><div class="v" id="rollLinked">—</div></div>
+      </div>
+      <div class="row">
+        <button class="btn" id="rollPick">Choose codes_master.csv</button>
+        <input type="file" id="rollFile" accept=".csv,text/csv" hidden>
+      </div>
+      <p class="note" id="rollNote" style="margin-top:12px"></p>
     </div>
 
     <!-- ---------------- EXPORT ---------------- -->
@@ -839,6 +861,71 @@ function renderAssignments(){
   }
 }
 
+/* ---------------------------------------------------------------- roll */
+
+async function renderRoll(){
+  await ensureToken();
+  const [total, linked] = await Promise.all([
+    head("/participants?select=code"),
+    head("/participants?select=code&void=is.false&pid=not.is.null")
+  ]);
+  $("rollCount").textContent = total.toLocaleString();
+  $("rollLinked").textContent = linked.toLocaleString();
+}
+
+/* Same tolerant parse as the scanner: needs a `code` column, takes serial,
+   name and a participant id under any of the usual headings if present. */
+function parseRoll(text){
+  const lines = text.split(/\r?\n/).filter(l => l.trim());
+  if (!lines.length) throw new Error("That file is empty.");
+  const headers = lines[0].split(",").map(h => h.trim().toLowerCase());
+  const ci = headers.indexOf("code"), si = headers.indexOf("serial"), ni = headers.indexOf("name");
+  const pi = ["participant_id","workshop_id","id","pid"].map(h => headers.indexOf(h)).find(i => i > -1);
+  if (ci === -1) throw new Error("The CSV needs a 'code' column.");
+  const out = [], seen = new Set();
+  for (let i = 1; i < lines.length; i++){
+    const c = lines[i].split(",");
+    const code = String(c[ci] || "").trim().toUpperCase().replace(/[^0-9A-Z]/g, "");
+    if (code.length !== 8 || seen.has(code)) continue;
+    seen.add(code);
+    const row = { code };
+    if (si > -1 && c[si]) row.serial = +c[si] || null;
+    if (ni > -1 && c[ni] && c[ni].trim()) row.name = c[ni].trim();
+    if (pi !== undefined && pi > -1 && c[pi] && c[pi].trim()) row.pid = c[pi].trim();
+    out.push(row);
+  }
+  return out;
+}
+
+$("rollPick").addEventListener("click", () => $("rollFile").click());
+$("rollFile").addEventListener("change", async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const note = $("rollNote");
+  note.classList.remove("bad-text");
+  try{
+    const rows = parseRoll(await f.text());
+    if (!rows.length) throw new Error("No usable codes in that file.");
+    if (!confirm(`Load ${rows.length.toLocaleString()} codes into the server?\n\n` +
+                 `Codes already there are left untouched.`)) return;
+    const CHUNK = 500;
+    for (let i = 0; i < rows.length; i += CHUNK){
+      note.textContent = `Loading… ${Math.min(i + CHUNK, rows.length).toLocaleString()} of ${rows.length.toLocaleString()}`;
+      // ignore-duplicates, never merge: a re-import must not undo a pairing
+      // or un-void a reissued badge. New codes are added, nothing else moves.
+      await write("POST", "/participants", rows.slice(i, i + CHUNK),
+                  "resolution=ignore-duplicates,return=minimal");
+    }
+    await renderRoll();
+    note.textContent = `Done. ${rows.length.toLocaleString()} codes in the file; the server now holds ${$("rollCount").textContent}.`;
+    toast("Roll loaded.");
+  }catch(err){
+    note.textContent = err.message;
+    note.classList.add("bad-text");
+  }finally{
+    e.target.value = "";
+  }
+});
+
 /* ---------------------------------------------------------------- export */
 
 function download(name, text){
@@ -966,6 +1053,7 @@ document.querySelectorAll(".tab").forEach(b => {
     if (tab === "assign") renderAssignments();
     if (tab === "volunteers") renderVolunteers();
     if (tab === "sessions") renderSessions();
+    if (tab === "roll") renderRoll().catch(e => toast(e.message, true));
   });
 });
 

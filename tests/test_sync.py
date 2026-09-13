@@ -35,13 +35,17 @@ STUB_PORT = 8792
 
 
 class Stub:
-    """Just enough PostgREST: two insert endpoints and a dedupe on uuid."""
+    """Just enough PostgREST: the two ingest functions, deduping on uuid and
+    returning a verdict per row the way the real ones do."""
+
+    FN = {"ingest_scans": "scans", "ingest_links": "badge_links"}
 
     def __init__(self):
         self.rows = {"scans": {}, "badge_links": {}}
         self.posts = {"scans": 0, "badge_links": 0}
         self.mode = "ok"          # ok | hang | reject
         self.hang_seconds = 20
+        self.refuse_codes = set()   # codes the "database" has never issued
 
     def url(self):
         return f"http://127.0.0.1:{STUB_PORT}"
@@ -67,8 +71,17 @@ def stub():
             self.end_headers()
 
         def do_POST(self):
-            table = self.path.rsplit("/", 1)[-1].split("?")[0]
+            fn = self.path.rsplit("/", 1)[-1].split("?")[0]
+            table = Stub.FN.get(fn)
             body = self.rfile.read(int(self.headers.get("Content-Length", 0) or 0))
+            if table is None or "/rpc/" not in self.path:
+                # Plain inserts are exactly what RLS now refuses on the real
+                # server, so refuse them here too.
+                self.send_response(401)
+                self._cors()
+                self.end_headers()
+                self.wfile.write(b'{"code":"42501","message":"new row violates row-level security policy"}')
+                return
 
             if s.mode == "hang":
                 # Accept the connection, then say nothing. This is the network
@@ -84,14 +97,23 @@ def stub():
                 return
 
             s.posts[table] = s.posts.get(table, 0) + 1
-            for row in json.loads(body or b"[]"):
-                # Prefer: resolution=ignore-duplicates -- a re-sent row is a
-                # no-op, not an error.
-                s.rows.setdefault(table, {}).setdefault(row["uuid"], row)
+            verdicts = []
+            for row in json.loads(body or b"{}").get("rows", []):
+                if row.get("code") in s.refuse_codes:
+                    verdicts.append({"uuid": row["uuid"], "status": "rejected",
+                                     "detail": "code was never issued"})
+                elif row["uuid"] in s.rows.setdefault(table, {}):
+                    # A re-sent row is a no-op, not an error.
+                    verdicts.append({"uuid": row["uuid"], "status": "duplicate", "detail": None})
+                else:
+                    s.rows[table][row["uuid"]] = row
+                    verdicts.append({"uuid": row["uuid"], "status": "ok", "detail": None})
 
-            self.send_response(201)
+            self.send_response(200)
             self._cors()
+            self.send_header("Content-Type", "application/json")
             self.end_headers()
+            self.wfile.write(json.dumps(verdicts).encode())
 
     socketserver.TCPServer.allow_reuse_address = True
     httpd = socketserver.ThreadingTCPServer(("127.0.0.1", STUB_PORT), H)
@@ -248,7 +270,7 @@ def test_a_permanent_rejection_is_surfaced_not_retried_forever(server, badges, s
         page.click("#openReview")
         page.wait_for_timeout(400)
         state = page.inner_text("#syncState").lower()
-        assert "rejected" in state, f"the rejection was not surfaced: {state!r}"
+        assert "refused" in state, f"the rejection was not surfaced: {state!r}"
         assert "saved on this phone" in state, \
             "a volunteer must be told the scans are not lost"
         assert not errors
@@ -288,5 +310,41 @@ def test_a_reissue_names_the_badge_it_replaces(server, badges, stub):
         assert rows[0]["replaces"] in (None, ""), "the first link replaced nothing"
         assert rows[1]["replaces"] == old, "the reissue did not name the old badge"
         assert rows[1]["code"] == new
+        assert not errors
+        b.close()
+
+
+def test_one_refused_row_does_not_block_the_rest(server, badges, stub):
+    """A code the server has never heard of -- a phone with a stale roll, say
+    -- is refused for good, and the good rows around it still go through.
+    Before the ingest functions, one such row failed the whole batch and the
+    phone showed "Server rejected 200 records" for the rest of the day."""
+    stub.refuse_codes.add(badges["paired"])
+    spare = badges["spares"][0]
+    with sync_playwright() as pw:
+        b, page, errors = open_registration(pw, "blank.y4m", server, **cfg(stub))
+        link(page, spare, "P960", name="Good Row")           # will be accepted
+
+        from test_pairing import go_to_venue
+        go_to_venue(page)
+        type_into_scanner(page, badges["paired"])            # will be refused
+        type_into_scanner(page, spare)                       # will be accepted
+        assert page.inner_text("#sessCount") == "2"
+
+        push(page)
+        assert wait_rows(stub, "scans", 1), "the good scan never arrived"
+        assert badges["paired"] not in {r["code"] for r in stub.rows["scans"].values()}
+
+        # Nothing left waiting, and the refusal is visible rather than silent.
+        page.click("#openReview")
+        page.wait_for_timeout(500)
+        assert page.inner_text("#rQueue").strip() == "0", "a settled row is still queued"
+        state = page.inner_text("#syncState").lower()
+        assert "refused 1" in state, f"refusal not surfaced: {state!r}"
+
+        # And it is not sent again.
+        before = stub.posts["scans"]
+        push(page); page.wait_for_timeout(600)
+        assert stub.posts["scans"] == before
         assert not errors
         b.close()
