@@ -34,6 +34,39 @@ the file during setup. If you want the roll to ship with the app, put it at
 `scanner/codes.csv` and build the APK — that copy stays on the phones you
 hand out rather than on a public URL.
 
+## Server details for the apps
+
+The scanner and the admin page both need the Supabase project URL and the
+publishable key. They are **not** in the HTML and not in this repo. They live
+in the Worker's environment as encrypted secrets and are served from one
+route, `/config.json`, by `worker/index.js`:
+
+```
+curl https://shivir-attendance.shreyash-d60.workers.dev/config.json
+{"supaUrl":"https://….supabase.co","supaKey":"sb_publishable_…"}
+```
+
+The scanner reads it once at setup and caches it in IndexedDB — never during
+scanning. The admin page uses it to pre-fill the sign-in form. A phone running
+from the APK or a plain file server gets a 404, and falls back to the pasted
+setup code.
+
+To rotate the key, set the secret again — no rebuild, no redeploy, no visit
+to fifty phones:
+
+```
+printf '%s' 'https://….supabase.co'  | npx wrangler secret put SUPABASE_URL
+printf '%s' 'sb_publishable_…'       | npx wrangler secret put SUPABASE_PUBLISHABLE_KEY
+```
+
+Or in the Cloudflare dashboard: Workers → shivir-attendance → Settings →
+Variables and Secrets.
+
+**Only the publishable key ever goes here.** This route serves its value to
+every visitor. That is correct for the publishable key — it is designed to be
+public, and row-level security is what protects the data. The `service_role`
+key would give anyone full read and write on the participant roll.
+
 ## Caching
 
 `index.html`, `sw.js` and the dashboard are served `no-cache`. A phone that
@@ -50,8 +83,8 @@ npx wrangler deploy
 ```
 
 `wrangler.jsonc` holds the project name and points `assets.directory` at
-`dist`. There is no Worker script: this serves static assets and nothing else,
-which is the point.
+`dist`. The only Worker code is `worker/index.js`, which serves
+`/config.json`; every other request goes straight to the static files.
 
 ## Deploying from CI
 

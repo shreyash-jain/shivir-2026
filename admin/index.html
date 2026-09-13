@@ -1047,14 +1047,30 @@ async function start(){
   poller = setInterval(tick, POLL);
 }
 
-(function boot(){
+(async function boot(){
   try{
     const saved = JSON.parse(localStorage.getItem(REMEMBER) || "{}");
     if (saved.url)   $("url").value = saved.url;
     if (saved.key)   $("key").value = saved.key;
     if (saved.email) $("email").value = saved.email;
   }catch(e){}
-  ($("email").value ? $("pw") : $("url")).focus();
+
+  // Where this is hosted, the project URL and key come from the Cloudflare
+  // environment, so an organiser only ever types an email and a password.
+  if (!$("url").value || !$("key").value){
+    try{
+      const r = await fetch("./config.json", { cache:"no-store" });
+      if (r.ok){
+        const c = await r.json();
+        if (c.supaUrl && !$("url").value) $("url").value = c.supaUrl;
+        if (c.supaKey && !$("key").value) $("key").value = c.supaKey;
+      }
+    }catch(e){}
+  }
+
+  ($("url").value && $("key").value
+    ? ($("email").value ? $("pw") : $("email"))
+    : $("url")).focus();
 })();
 </script>
 </body>

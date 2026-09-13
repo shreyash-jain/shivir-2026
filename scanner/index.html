@@ -803,9 +803,32 @@ function describeConf(){
   el.classList.remove("bad-text");
 }
 
+/* Where this app is hosted, the project URL and key are served from the
+   Cloudflare environment so that rotating a key needs no redeploy. Read once,
+   at setup, on wifi -- then cached like everything else. A phone running from
+   an APK or a plain file server just gets nothing back and falls through to
+   the pasted setup code. */
+async function loadServerDetails(){
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try{
+    const r = await fetch("./config.json", { cache:"no-store", signal:ctrl.signal });
+    if (!r.ok) return false;
+    const c = await r.json();
+    if (!c.supaUrl || !c.supaKey) return false;
+    S.supaUrl = c.supaUrl; S.supaKey = c.supaKey;
+    $("supaUrl").value = S.supaUrl;
+    $("supaKey").value = S.supaKey;
+    persistCfg();
+    return true;
+  }catch(e){ return false; }
+  finally{ clearTimeout(timer); }
+}
+
 /* One fetch, on wifi, at base camp. Never during a queue. */
 async function loadConfFromServer(){
   const el = $("confState");
+  if (!S.supaUrl || !S.supaKey) await loadServerDetails();
   if (!S.supaUrl || !S.supaKey){
     el.textContent = "No server set. Paste the setup from the admin first.";
     el.classList.add("bad-text");
@@ -1275,6 +1298,7 @@ $("shareCfg").addEventListener("click", async () => {
   $("supaUrl").value = S.supaUrl;
   $("supaKey").value = S.supaKey;
   if (pendingCfg) applyCfg(pendingCfg);
+  if (!S.supaUrl || !S.supaKey) await loadServerDetails();
   describeConf();
 
   S.people = await countPeople();

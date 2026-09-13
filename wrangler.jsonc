@@ -1,21 +1,28 @@
 {
   // Cloudflare deployment for the static site assembled by tools/build_site.sh.
   //
-  //   /            the volunteer scanner  (scanner/, copied verbatim)
-  //   /dashboard/  the organiser view     (dashboard/, copied verbatim)
+  //   /             the volunteer scanner (scanner/, copied verbatim)
+  //   /admin/        the super admin       (admin/, copied verbatim)
+  //   /dashboard/    a redirect to /admin
+  //   /config.json   the only dynamic route, from the environment
   //
-  // There is no Worker script -- this serves static assets and nothing else,
+  // Apart from that one route this serves static assets and nothing else,
   // which is the whole point: the scanner must run from cache with no network.
   //
   // Deploy:  sh tools/build_site.sh && npx wrangler deploy
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "shivir-attendance",
   "compatibility_date": "2026-09-11",
+  // One route, /config.json, served from the environment. Everything else
+  // falls through to the assets below. See worker/index.js.
+  "main": "worker/index.js",
   "observability": {
     "enabled": true
   },
   "assets": {
     "directory": "dist",
+    // Lets the Worker hand every other request straight to the static files.
+    "binding": "ASSETS",
     // Serve /dashboard/ as /dashboard/index.html, and keep the trailing-slash
     // form canonical so relative paths inside the page resolve.
     "html_handling": "auto-trailing-slash",
