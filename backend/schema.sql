@@ -4,13 +4,17 @@
 -- powers:
 --
 --   Volunteer phones  hold the publishable key and run as `anon`. They may
---                     insert scans and insert badge links. Nothing else --
---                     no select on participants, no update, no delete. A
---                     leaked key cannot read the roll or erase a record.
+--                     insert scans and insert badge links, and read what a
+--                     phone must know to work offline: the session schedule,
+--                     the duty roster, and volunteer names. They cannot read
+--                     the participant roll and cannot update or delete
+--                     anything. A leaked key cannot expose who is attending,
+--                     erase a record, or change the schedule.
 --
 --   Organisers        sign in through Supabase Auth and run as
---                     `authenticated`. Only those listed in `organisers`
---                     can read. See dashboard/README.md.
+--                     `authenticated`. Only those listed in `organisers` can
+--                     read the roll or configure the event. See
+--                     dashboard/README.md.
 --
 -- Re-runnable: every statement is guarded, so you can paste the whole file
 -- again after an edit without dropping data.
@@ -55,6 +59,33 @@ create table if not exists session_days (
   primary key (session_id, day)
 );
 
+-- Who is holding each phone. The super admin maintains this; phones download
+-- it once and a volunteer picks their own name off the cached list at the
+-- start of a shift. No logins: these are shared handsets and a password reset
+-- at 6am in a field is not a support model.
+create table if not exists volunteers (
+  id         text primary key,             -- short, stable, e.g. 'v-anjali'
+  name       text not null,
+  phone      text,                         -- for the shift coordinator only
+  active     boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- Which volunteer is working which session on which day.
+--
+-- This is what makes two concurrent sessions separable. Venue and clock time
+-- alone cannot tell them apart -- see the warning in CLAUDE.md about scans
+-- being filed under the wrong event -- but the volunteer knows which door
+-- they are standing at, and the admin knows which door that is.
+create table if not exists assignments (
+  volunteer_id text not null references volunteers(id) on delete cascade,
+  session_id   text not null references sessions(id)   on delete cascade,
+  day          date not null,
+  primary key (volunteer_id, session_id, day)
+);
+
+create index if not exists assignments_day on assignments (day);
+
 create table if not exists scans (
   uuid         uuid primary key,             -- generated on the phone
   dedupe       text not null unique,         -- code|session|day
@@ -64,11 +95,21 @@ create table if not exists scans (
   venue        text,
   scanned_at   timestamptz not null,         -- when it happened, not when it arrived
   day          date not null,
-  volunteer    text,
+  volunteer    text,                        -- the name, kept for plain exports
+  volunteer_id text,                         -- who was assigned, when known
   device       text,
   source       text,                         -- 'camera' or 'manual'
+  assigned     boolean,                      -- false when the volunteer
+                                             -- overrode their assignment
   received_at  timestamptz not null default now()
 );
+
+-- Deliberately NO foreign key on volunteer_id. A phone configured before a
+-- volunteer was renamed or removed would otherwise have every one of its
+-- scans rejected permanently, wedging that phone's queue for the rest of the
+-- day. A dangling volunteer id costs a join in a report; a rejected insert
+-- costs attendance. (scans.code keeps its foreign key -- there the whole
+-- point is to reject codes that were never issued.)
 
 create index if not exists scans_session_day on scans (session_id, day);
 create index if not exists scans_code on scans (code);
@@ -157,6 +198,8 @@ alter table participants enable row level security;
 alter table sessions     enable row level security;
 alter table session_days enable row level security;
 alter table scans        enable row level security;
+alter table volunteers   enable row level security;
+alter table assignments  enable row level security;
 alter table badge_links  enable row level security;
 
 -- Phones may add scans and badge links and nothing else. No select, no
@@ -182,9 +225,28 @@ create policy "read session days"
   on session_days for select to anon
   using (true);
 
+-- Phones need their assignments to know which of two concurrent sessions a
+-- scan belongs to. Assignments are a duty roster -- who stands at which door
+-- -- and carry nothing personal.
+drop policy if exists "read assignments" on assignments;
+create policy "read assignments"
+  on assignments for select to anon
+  using (true);
+
+-- Phones need volunteer NAMES so the person holding one can pick themselves
+-- off a list. They do not need phone numbers. Rather than open the table, a
+-- view exposes exactly the two columns required; it runs as its owner, so it
+-- reads through the RLS that keeps the base table shut.
+create or replace view volunteer_roster as
+  select id, name from volunteers where active;
+
+grant select on volunteer_roster to anon, authenticated;
+
 -- participants has RLS on and deliberately no anon policy, so the key
 -- cannot read names. Phones get the roll from the bundled codes.csv instead.
 -- The foreign key on scans.code still rejects codes that were never issued.
+-- volunteers is shut for the same reason; volunteer_roster is the narrow
+-- window into it.
 
 -- ------------------------------------------------------------- organisers
 --
@@ -239,6 +301,35 @@ create policy "organisers read session days"
   on session_days for select to authenticated
   using (is_organiser());
 
+-- ------------------------------------------------------- admin write access
+--
+-- The super admin page configures the event: sessions, the ten-day calendar,
+-- the volunteer roster and who works what. All of it is organiser-only, and
+-- none of it is reachable with the publishable key the phones carry.
+--
+-- `for all` covers insert, update and delete; both using and with check are
+-- required, or an organiser could read a row and fail to write it.
+
+drop policy if exists "organisers write sessions" on sessions;
+create policy "organisers write sessions"
+  on sessions for all to authenticated
+  using (is_organiser()) with check (is_organiser());
+
+drop policy if exists "organisers write session days" on session_days;
+create policy "organisers write session days"
+  on session_days for all to authenticated
+  using (is_organiser()) with check (is_organiser());
+
+drop policy if exists "organisers write volunteers" on volunteers;
+create policy "organisers write volunteers"
+  on volunteers for all to authenticated
+  using (is_organiser()) with check (is_organiser());
+
+drop policy if exists "organisers write assignments" on assignments;
+create policy "organisers write assignments"
+  on assignments for all to authenticated
+  using (is_organiser()) with check (is_organiser());
+
 -- ---------------------------------------------------------------- reporting
 --
 -- Views run with the privileges of their owner unless told otherwise.
@@ -266,6 +357,27 @@ with (security_invoker = true) as
            where sc.session_id = s.id and sc.day = d.day) as present
   from session_days d
   join sessions s on s.id = d.session_id
+  order by d.day, s.starts;
+
+-- Which sessions have nobody on the door. The thing a coordinator wants to
+-- see at 5am, while there is still time to fix it.
+create or replace view session_coverage
+with (security_invoker = true) as
+  select d.day,
+         s.id    as session_id,
+         s.name  as session_name,
+         s.venue,
+         s.starts,
+         s.ends,
+         count(a.volunteer_id) as volunteers,
+         coalesce(
+           string_agg(v.name, ', ' order by v.name) filter (where v.name is not null),
+           '') as assigned_to
+  from session_days d
+  join sessions s on s.id = d.session_id
+  left join assignments a on a.session_id = s.id and a.day = d.day
+  left join volunteers  v on v.id = a.volunteer_id
+  group by d.day, s.id, s.name, s.venue, s.starts, s.ends
   order by d.day, s.starts;
 
 -- Who is missing from a session that has already run. Only live badges that

@@ -11,7 +11,7 @@ Run:
 
 from playwright.sync_api import sync_playwright
 
-from browser import open_registration, type_into_scanner
+from browser import open_registration, pick_volunteer, type_into_scanner
 
 
 def link(page, code, pid, name=None):
@@ -31,7 +31,7 @@ def link(page, code, pid, name=None):
 def go_to_venue(page):
     page.click("#leaveStation")
     page.wait_for_timeout(500)
-    page.click(".station:has-text('Prayer hall')")
+    page.click("#stationList .station:has-text('Morning prayer')")
     page.wait_for_timeout(2000)
 
 
@@ -134,9 +134,11 @@ def test_pairing_survives_reloading_the_participant_list(server, badges):
         }""")
         page.wait_for_timeout(800)
 
-        page.click("#startBtn")
-        page.wait_for_timeout(400)
-        page.click(".station:has-text('Prayer hall')")
+        if page.is_visible("#s-setup"):
+            page.click("#startBtn")
+            page.wait_for_timeout(400)
+        pick_volunteer(page)
+        page.click("#stationList .station:has-text('Morning prayer')")
         page.wait_for_timeout(2000)
 
         type_into_scanner(page, spare)

@@ -8,7 +8,8 @@
 # dashboard, and none of the docs, tests or tooling.
 #
 #   dist/            <- scanner/, so volunteers get a bare URL
-#   dist/dashboard/  <- dashboard/
+#   dist/admin/      <- admin/     (super admin: sessions, volunteers, assignments)
+#   dist/dashboard/  <- dashboard/ (a redirect to /admin, for links already sent)
 #
 # Usage: sh tools/build_site.sh [outdir]
 set -eu
@@ -17,7 +18,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OUT=${1:-"$ROOT/dist"}
 
 rm -rf "$OUT"
-mkdir -p "$OUT/dashboard"
+mkdir -p "$OUT/dashboard" "$OUT/admin"
 
 # The scanner, at the root of the site.
 cp "$ROOT/scanner/index.html"    "$OUT/"
@@ -35,6 +36,7 @@ else
   echo "no scanner/codes.csv -- phones will need the file picker on setup"
 fi
 
+cp "$ROOT/admin/index.html"     "$OUT/admin/"
 cp "$ROOT/dashboard/index.html" "$OUT/dashboard/"
 
 # Never cache the app shell. A phone that caches a stale index.html keeps an
@@ -53,6 +55,9 @@ cat > "$OUT/_headers" <<'EOF'
   Cache-Control: no-cache
 
 /dashboard/index.html
+  Cache-Control: no-cache
+
+/admin/index.html
   Cache-Control: no-cache
 
 /codes.csv

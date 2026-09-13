@@ -148,52 +148,77 @@ video{width:100%;height:100%;object-fit:cover;display:block}
 <section id="s-setup" class="screen on">
   <div class="pad">
     <h1>Set up this phone</h1>
-    <p class="sub">Do this once, on wifi. After that the app works with no signal.</p>
+    <p class="sub">Do this once, on wifi at base camp. After that the app works with no signal.</p>
 
-    <div class="field">
-      <label for="vol">Your name</label>
-      <input id="vol" placeholder="e.g. Anjali" autocomplete="name">
-    </div>
+    <h2>1. Connect</h2>
+    <button class="btn sec" id="pasteCfg">Paste setup from the admin</button>
+    <p class="note" id="cfgState">Or enter the server details by hand below.</p>
+    <details style="margin-top:12px">
+      <summary class="note" style="cursor:pointer">Enter the server by hand</summary>
+      <div style="margin-top:12px">
+        <div class="field">
+          <label for="supaUrl">Project URL</label>
+          <input id="supaUrl" placeholder="https://xxxx.supabase.co" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="supaKey">Publishable key</label>
+          <input id="supaKey" placeholder="sb_publishable_…" autocapitalize="off" autocomplete="off" spellcheck="false">
+        </div>
+      </div>
+    </details>
 
-    <h2>Participant list</h2>
+    <h2>2. Sessions and volunteers</h2>
+    <p class="note" id="confState">Not loaded yet.</p>
+    <button class="btn sec" id="loadConf" style="margin-top:10px">Load from the server</button>
+
+    <h2>3. Participant list</h2>
     <p class="note" id="codeState">Looking for codes.csv…</p>
     <div class="row" style="margin-top:10px">
       <button class="btn sec" id="pickCsv">Choose codes.csv</button>
     </div>
     <input type="file" id="csvFile" accept=".csv,text/csv" hidden>
 
-    <h2>Sessions</h2>
-    <p class="note" style="margin-bottom:12px">A scan counts toward whichever session is running at that venue when it happens.</p>
-    <div id="sessList"></div>
-    <button class="btn sec" id="addSess">Add a session</button>
-
-    <h2>Sync</h2>
-    <p class="note" style="margin-bottom:12px">Leave both blank to export by file instead. Scanning works either way — nothing here is needed to record attendance.</p>
-    <div class="field">
-      <label for="supaUrl">Project URL</label>
-      <input id="supaUrl" placeholder="https://xxxx.supabase.co" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false">
-    </div>
-    <div class="field">
-      <label for="supaKey">Publishable key</label>
-      <input id="supaKey" placeholder="sb_publishable_…" autocapitalize="off" autocomplete="off" spellcheck="false">
-    </div>
-
-    <div style="height:18px"></div>
-    <button class="btn" id="startBtn" disabled>Start scanning</button>
+    <div style="height:22px"></div>
+    <button class="btn" id="startBtn" disabled>Continue</button>
     <p class="note" id="setupWarn"></p>
-    <button class="btn sec" id="shareCfg" style="margin-top:10px">Copy setup for other phones</button>
-    <button class="btn sec" id="pasteCfg" style="margin-top:8px">Paste setup from another phone</button>
-    <p class="note" id="cfgState"></p>
+    <button class="btn sec" id="shareCfg" style="margin-top:10px">Copy setup for another phone</button>
+  </div>
+</section>
+
+<!-- ============ WHO ============ -->
+<section id="s-who" class="screen">
+  <div class="bar">
+    <div class="who"><b>Who is using this phone?</b><span id="whoMeta">Tap your name</span></div>
+    <button class="iconbtn" id="whoBack" aria-label="Settings">⚙</button>
+  </div>
+  <div class="pad">
+    <input id="whoFilter" placeholder="Search for your name" autocomplete="off" style="margin-bottom:14px">
+    <div id="whoList"></div>
+    <div id="whoFallback" style="display:none">
+      <p class="note" style="margin-bottom:12px">No volunteer list on this phone. Type your name instead — scans will still be traced back to you.</p>
+      <div class="field">
+        <label for="vol">Your name</label>
+        <input id="vol" placeholder="e.g. Anjali" autocomplete="name">
+      </div>
+      <button class="btn" id="whoGo">Continue</button>
+    </div>
   </div>
 </section>
 
 <!-- ============ STATION ============ -->
 <section id="s-station" class="screen">
   <div class="bar">
-    <div class="who"><b>Pick your station</b><span id="stationClock"></span></div>
+    <div class="who"><b id="stationTitle">Your sessions</b><span id="stationClock"></span></div>
+    <button class="iconbtn" id="changeWho" aria-label="Change volunteer">⇄</button>
     <button class="iconbtn" id="backSetup" aria-label="Settings">⚙</button>
   </div>
-  <div class="pad" id="stationList"></div>
+  <div class="pad">
+    <div id="stationList"></div>
+    <div id="otherWrap" style="margin-top:8px">
+      <button class="btn sec" id="showOther">Scan a different session</button>
+      <div id="otherList" style="margin-top:10px;display:none"></div>
+    </div>
+  </div>
 </section>
 
 <!-- ============ SCAN ============ -->
@@ -375,8 +400,9 @@ async function seenAlready(dedupe){
  * State
  * ------------------------------------------------------------------ */
 const S = {
-  volunteer:"", device:"", supaUrl:"", supaKey:"", sessions:[],
-  station:null, session:null, count:0, people:0,
+  volunteer:"", volunteerId:"", device:"", supaUrl:"", supaKey:"",
+  sessions:[], volunteers:[], assignments:[], sessionDays:{},
+  station:null, session:null, assigned:true, count:0, people:0,
   cooldown:new Map(), busy:false, stream:null, loop:null, detector:null,
   mode:"attend", pair:{ code:null, pid:null, name:"", known:null }
 };
@@ -397,11 +423,11 @@ const nowMin = () => { const d = new Date(); return d.getHours()*60 + d.getMinut
 const today = () => new Date().toISOString().slice(0,10);
 const $ = id => document.getElementById(id);
 
-function venues(){ return [...new Set(S.sessions.map(s => s.venue))]; }
-function activeAt(venue, m = nowMin()){
-  const here = S.sessions.filter(s => s.venue === venue);
-  return here.find(s => m >= toMin(s.start) - GRACE && m <= toMin(s.end) + GRACE) || null;
-}
+/* There is deliberately no activeAt(venue) any more. Choosing a session by
+   venue and clock is exactly the silent mis-filing CLAUDE.md warns about, and
+   it cannot separate two sessions running at the same time. The session comes
+   from the volunteer's assignment; GRACE is only used to label a session
+   "on now" in the picker. */
 
 /* ------------------------------------------------------------------ *
  * Feedback — sound and vibration, so a volunteer needn't look
@@ -456,7 +482,12 @@ async function record(raw, source){
     sessionId: S.session.id, sessionName: S.session.name, venue: S.session.venue,
     pid: person.pid, name: person.name,
     at: new Date().toISOString(), day: today(),
-    volunteer: S.volunteer, device: S.device, source, sent: 0
+    volunteer: S.volunteer, volunteerId: S.volunteerId,
+    // false when the volunteer chose a session they were not assigned to.
+    // Worth recording: it is the difference between a number you can trust
+    // and one somebody will have to explain afterwards.
+    assigned: S.assigned,
+    device: S.device, source, sent: 0
   };
   await tx("scans","readwrite", s => s.put(scan));
 
@@ -648,6 +679,8 @@ function scanRow(s){
     scanned_at:   s.at,
     day:          s.day,
     volunteer:    s.volunteer,
+    volunteer_id: s.volunteerId || null,
+    assigned:     s.assigned === undefined ? null : !!s.assigned,
     device:       s.device,
     source:       s.source
   };
@@ -741,44 +774,94 @@ setInterval(sync, 25000);
 
 /* ------------------------------------------------------------------ *
  * Setup screen
+ *
+ * The event is configured by the admin, not here. This phone downloads that
+ * configuration once and then owns a copy, because at the venue there may be
+ * no network at all -- see the offline invariants in CLAUDE.md. Nothing on
+ * this screen is consulted again once scanning starts.
  * ------------------------------------------------------------------ */
-function drawSessions(){
-  const box = $("sessList");
-  box.innerHTML = "";
-  S.sessions.forEach((s, i) => {
-    const el = document.createElement("div");
-    el.className = "sess";
-    el.innerHTML = `
-      <div class="top">
-        <input value="${s.name}" data-k="name" placeholder="Session name">
-        <button class="x" data-del aria-label="Remove">×</button>
-      </div>
-      <div class="times">
-        <input value="${s.venue}" data-k="venue" placeholder="Venue">
-        <input type="time" value="${s.start}" data-k="start">
-        <input type="time" value="${s.end}" data-k="end">
-      </div>`;
-    el.querySelectorAll("[data-k]").forEach(inp => {
-      inp.addEventListener("change", () => { S.sessions[i][inp.dataset.k] = inp.value; persistCfg(); });
-    });
-    el.querySelector("[data-del]").addEventListener("click", () => {
-      S.sessions.splice(i,1); drawSessions(); persistCfg();
-    });
-    box.appendChild(el);
+
+function persistCfg(){
+  setMeta("cfg", {
+    sessions:S.sessions, sessionDays:S.sessionDays,
+    volunteers:S.volunteers, assignments:S.assignments,
+    supaUrl:S.supaUrl, supaKey:S.supaKey,
+    volunteer:S.volunteer, volunteerId:S.volunteerId
   });
 }
 
-function persistCfg(){
-  setMeta("cfg", { sessions:S.sessions, supaUrl:S.supaUrl, supaKey:S.supaKey, volunteer:S.volunteer });
+function describeConf(){
+  const el = $("confState");
+  if (!S.sessions.length){
+    el.textContent = "Not loaded yet.";
+    return;
+  }
+  const mine = S.assignments.length;
+  el.textContent =
+    `${S.sessions.length} sessions, ${S.volunteers.length} volunteers` +
+    (mine ? `, ${mine} assignments` : "") + " stored on this phone.";
+  el.classList.remove("bad-text");
+}
+
+/* One fetch, on wifi, at base camp. Never during a queue. */
+async function loadConfFromServer(){
+  const el = $("confState");
+  if (!S.supaUrl || !S.supaKey){
+    el.textContent = "No server set. Paste the setup from the admin first.";
+    el.classList.add("bad-text");
+    return false;
+  }
+  el.classList.remove("bad-text");
+  el.textContent = "Loading…";
+
+  const base = S.supaUrl.replace(/\/+$/,"") + "/rest/v1/";
+  const get = async path => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), TIMEOUT);
+    try{
+      const r = await fetch(base + path, {
+        signal: ctrl.signal,
+        headers: { apikey:S.supaKey, Authorization:"Bearer " + S.supaKey }
+      });
+      if (!r.ok) throw new Error(`${r.status} on ${path.split("?")[0]}`);
+      return r.json();
+    }finally{ clearTimeout(timer); }
+  };
+
+  try{
+    const [sessions, days, volunteers, assignments] = await Promise.all([
+      get("sessions?select=id,name,venue,starts,ends&order=starts"),
+      get("session_days?select=session_id,day"),
+      get("volunteer_roster?select=id,name&order=name"),
+      get("assignments?select=volunteer_id,session_id,day")
+    ]);
+
+    // The scanner speaks start/end; the database speaks starts/ends.
+    S.sessions = sessions.map(s => ({
+      id:s.id, name:s.name, venue:s.venue,
+      start:String(s.starts).slice(0,5), end:String(s.ends).slice(0,5)
+    }));
+    S.sessionDays = days.reduce((m,r) => ((m[r.day] = m[r.day] || []).push(r.session_id), m), {});
+    S.volunteers = volunteers;
+    S.assignments = assignments;
+    persistCfg();
+    describeConf();
+    checkReady();
+    return true;
+  }catch(e){
+    el.textContent = "Could not load: " + String(e.message || e) +
+      ". The setup code from the admin also carries a copy.";
+    el.classList.add("bad-text");
+    return false;
+  }
 }
 
 function checkReady(){
-  const ok = S.people > 0 && $("vol").value.trim().length > 0 && S.sessions.length > 0;
+  const ok = S.people > 0 && S.sessions.length > 0;
   $("startBtn").disabled = !ok;
   $("setupWarn").textContent = ok ? "" :
-    S.people === 0 ? "Load the participant list to continue." :
-    !$("vol").value.trim() ? "Enter your name so scans can be traced back." :
-    "Add at least one session.";
+    S.sessions.length === 0 ? "Load the sessions and volunteers to continue." :
+    "Load the participant list to continue.";
 }
 
 function parseCsv(text){
@@ -819,10 +902,108 @@ function go(id){
   $(id).classList.add("on");
 }
 
+/* ------------------------------------------------------------------ *
+ * Who is holding this phone
+ *
+ * Handsets are shared and swap hands between shifts, so this is asked at the
+ * start of every shift rather than once at setup. It is also what makes two
+ * sessions running at the same time separable: the assignment says which
+ * door this person is standing at, and the clock cannot.
+ * ------------------------------------------------------------------ */
+function drawWho(){
+  const list = $("whoList"), fallback = $("whoFallback");
+  const roster = S.volunteers || [];
+  fallback.style.display = roster.length ? "none" : "block";
+  $("whoFilter").style.display = roster.length > 8 ? "block" : "none";
+  list.innerHTML = "";
+
+  const q = $("whoFilter").value.trim().toLowerCase();
+  const shown = roster.filter(v => !q || v.name.toLowerCase().includes(q));
+
+  for (const v of shown){
+    const mine = S.assignments.filter(
+      a => a.volunteer_id === v.id && a.day === today()).length;
+    const b = document.createElement("button");
+    b.className = "station";
+    b.innerHTML = `<b>${v.name}</b><span>${
+      mine ? `${mine} session${mine === 1 ? "" : "s"} today` : "No sessions assigned today"
+    }</span>`;
+    b.addEventListener("click", () => pickVolunteer(v.id, v.name));
+    list.appendChild(b);
+  }
+  if (roster.length && !shown.length){
+    list.innerHTML = `<p class="note">Nobody matches that. Check with the admin.</p>`;
+  }
+}
+
+function pickVolunteer(id, name){
+  S.volunteerId = id || "";
+  S.volunteer = name;
+  persistCfg();
+  drawStations();
+  go("s-station");
+}
+
+/* ------------------------------------------------------------------ *
+ * Station picker — the volunteer's own assignments first
+ * ------------------------------------------------------------------ */
+function myAssignments(){
+  const day = today();
+  const ids = S.assignments
+    .filter(a => a.volunteer_id === S.volunteerId && a.day === day)
+    .map(a => a.session_id);
+  return S.sessions.filter(s => ids.includes(s.id))
+    .sort((a,b) => toMin(a.start) - toMin(b.start));
+}
+
+/* Sessions scheduled for today, whoever is on them. Falls back to every
+   session when the calendar was never loaded. */
+function todaysSessions(){
+  const ids = S.sessionDays[today()];
+  if (!ids || !ids.length) return S.sessions.slice();
+  return S.sessions.filter(s => ids.includes(s.id));
+}
+
+function sessionButton(s, assigned){
+  const m = nowMin();
+  const live = m >= toMin(s.start) - GRACE && m <= toMin(s.end) + GRACE;
+  const b = document.createElement("button");
+  b.className = "station" + (live ? "" : " idle");
+  if (!assigned) b.style.borderLeftColor = "var(--warn)";
+  b.innerHTML = `<b>${s.name}</b><span>${s.venue} · ${s.start}–${s.end}${
+    live ? " · on now" : ""}</span>`;
+  b.addEventListener("click", () => {
+    if (!assigned){
+      // Deliberate friction. Scanning into a session you were not put on is
+      // sometimes the right call when the schedule slips, but it is never
+      // the thing you meant to do by mistake.
+      const ok = confirm(
+        `You are not assigned to "${s.name}".\n\n` +
+        `Scans will still be recorded, and will be marked as an override so ` +
+        `the count can be explained later.\n\nScan this session anyway?`);
+      if (!ok) return;
+    }
+    enterStation(s, assigned);
+  });
+  return b;
+}
+
 function drawStations(){
   const box = $("stationList");
   box.innerHTML = "";
-  $("stationClock").textContent = new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+  $("stationClock").textContent =
+    S.volunteer + " · " + new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
+
+  const mine = myAssignments();
+  $("stationTitle").textContent = mine.length ? "Your sessions" : "Nothing assigned to you";
+
+  if (mine.length){
+    mine.forEach(s => box.appendChild(sessionButton(s, true)));
+  } else {
+    box.insertAdjacentHTML("beforeend",
+      `<p class="note" style="margin:0 0 14px">The admin has not put you on a session
+       today. You can still scan one below, or register badges.</p>`);
+  }
 
   const reg = document.createElement("button");
   reg.className = "station";
@@ -831,22 +1012,24 @@ function drawStations(){
   reg.addEventListener("click", enterPairing);
   box.appendChild(reg);
 
-  venues().forEach(v => {
-    const live = activeAt(v);
-    const b = document.createElement("button");
-    b.className = "station" + (live ? "" : " idle");
-    b.innerHTML = live
-      ? `<b>${v}</b><span>${live.name} · ${live.start}–${live.end}</span>`
-      : `<b>${v}</b><span>Nothing scheduled right now — tap to scan anyway</span>`;
-    b.addEventListener("click", () => enterStation(v));
-    box.appendChild(b);
-  });
+  // Everything else, behind a tap.
+  const other = $("otherList");
+  other.innerHTML = "";
+  other.style.display = mine.length ? "none" : "block";
+  $("showOther").style.display = mine.length ? "" : "none";
+  const mineIds = mine.map(s => s.id);
+  todaysSessions().filter(s => !mineIds.includes(s.id))
+    .sort((a,b) => toMin(a.start) - toMin(b.start))
+    .forEach(s => other.appendChild(sessionButton(s, false)));
+  if (!other.children.length)
+    other.innerHTML = `<p class="note">No other sessions scheduled today.</p>`;
 }
 
 async function enterPairing(){
   S.mode = "pair";
   S.session = { id:"registration", name:"Registration", venue:"Registration", start:"", end:"" };
   S.station = "Registration";
+  S.assigned = true;
   $("sessName").textContent = "Register a badge";
   $("sessMeta").textContent = `Registration · ${S.volunteer}`;
   S.count = (await allLinks()).filter(l => l.at.slice(0,10) === today()).length;
@@ -858,20 +1041,16 @@ async function enterPairing(){
   startCamera();
 }
 
-async function enterStation(venue){
+async function enterStation(session, assigned = true){
   S.mode = "attend";
   $("pairPanel").classList.remove("on");
   $("typeBtn").textContent = "Type a code";
-  const live = activeAt(venue);
-  if (!live){
-    const here = S.sessions.filter(s => s.venue === venue);
-    if (!here.length) return;
-    S.session = here[0];
-  } else S.session = live;
-
-  S.station = venue;
+  S.session = session;
+  S.assigned = assigned;
+  S.station = session.venue;
   $("sessName").textContent = S.session.name;
-  $("sessMeta").textContent = `${venue} · ${S.session.start}–${S.session.end} · ${S.volunteer}`;
+  $("sessMeta").textContent = `${session.venue} · ${S.session.start}–${S.session.end} · ${S.volunteer}`
+    + (assigned ? "" : " · override");
   const scans = await allScans();
   S.count = scans.filter(s => s.sessionId === S.session.id && s.day === today()).length;
   $("sessCount").textContent = S.count;
@@ -938,15 +1117,26 @@ $("csvFile").addEventListener("change", async e => {
   try{ await loadCodes(await f.text()); }
   catch(err){ $("codeState").textContent = err.message; $("codeState").classList.add("bad-text"); }
 });
-$("vol").addEventListener("input", () => { S.volunteer = $("vol").value.trim(); persistCfg(); checkReady(); });
 $("supaUrl").addEventListener("change", () => { S.supaUrl = $("supaUrl").value.trim(); persistCfg(); });
 $("supaKey").addEventListener("change", () => { S.supaKey = $("supaKey").value.trim(); persistCfg(); });
-$("addSess").addEventListener("click", () => {
-  S.sessions.push({ id:"s"+Date.now().toString(36), name:"New session", venue:"", start:"09:00", end:"10:00" });
-  drawSessions(); persistCfg(); checkReady();
-});
-$("startBtn").addEventListener("click", () => { persistCfg(); drawStations(); go("s-station"); });
+$("loadConf").addEventListener("click", loadConfFromServer);
+
+$("startBtn").addEventListener("click", () => { persistCfg(); drawWho(); go("s-who"); });
 $("backSetup").addEventListener("click", () => go("s-setup"));
+$("whoBack").addEventListener("click", () => go("s-setup"));
+$("changeWho").addEventListener("click", () => { drawWho(); go("s-who"); });
+$("whoFilter").addEventListener("input", drawWho);
+$("whoGo").addEventListener("click", () => {
+  const name = $("vol").value.trim();
+  if (!name) return;
+  pickVolunteer("", name);
+});
+$("showOther").addEventListener("click", () => {
+  const el = $("otherList");
+  const open = el.style.display !== "none";
+  el.style.display = open ? "none" : "block";
+  $("showOther").textContent = open ? "Scan a different session" : "Hide other sessions";
+});
 $("leaveStation").addEventListener("click", () => { stopCamera(); drawStations(); go("s-station"); });
 
 $("typeBtn").addEventListener("click", () => { $("typeSheet").classList.add("on"); $("typeIn").focus(); });
@@ -1004,12 +1194,15 @@ function applyCfg(text){
   try{ inc = JSON.parse(atob(blob.trim())); }catch(e){ return false; }
   if (!inc || typeof inc !== "object") return false;
   if (Array.isArray(inc.sessions) && inc.sessions.length) S.sessions = inc.sessions;
+  if (Array.isArray(inc.volunteers))  S.volunteers  = inc.volunteers;
+  if (Array.isArray(inc.assignments)) S.assignments = inc.assignments;
+  if (inc.sessionDays && typeof inc.sessionDays === "object") S.sessionDays = inc.sessionDays;
   if (inc.supaUrl) S.supaUrl = inc.supaUrl;
   if (inc.supaKey) S.supaKey = inc.supaKey;
   $("supaUrl").value = S.supaUrl;
   $("supaKey").value = S.supaKey;
-  drawSessions();
   persistCfg();
+  describeConf();
   checkReady();
   return true;
 }
@@ -1019,7 +1212,14 @@ function cfgBlob(){
   // and rotating the key is an edit here rather than a redeploy of every
   // handset. The publishable key is safe to pass around; RLS is what
   // protects the data, not the secrecy of this string.
-  return btoa(JSON.stringify({ sessions:S.sessions, supaUrl:S.supaUrl, supaKey:S.supaKey }));
+  //
+  // The cached schedule and roster ride along too, so a phone that cannot
+  // reach the server at base camp can still be set up from one that could.
+  return btoa(JSON.stringify({
+    supaUrl:S.supaUrl, supaKey:S.supaKey,
+    sessions:S.sessions, sessionDays:S.sessionDays,
+    volunteers:S.volunteers, assignments:S.assignments
+  }));
 }
 
 $("pasteCfg").addEventListener("click", async () => {
@@ -1059,10 +1259,14 @@ $("shareCfg").addEventListener("click", async () => {
   if (!S.device){ S.device = "P" + Math.random().toString(36).slice(2,7).toUpperCase(); await setMeta("device", S.device); }
 
   const cfg = await getMeta("cfg");
-  S.sessions  = cfg?.sessions  || DEFAULT_SESSIONS.slice();
-  S.supaUrl   = cfg?.supaUrl   || "";
-  S.supaKey   = cfg?.supaKey   || "";
-  S.volunteer = cfg?.volunteer || "";
+  S.sessions    = cfg?.sessions    || DEFAULT_SESSIONS.slice();
+  S.sessionDays = cfg?.sessionDays || {};
+  S.volunteers  = cfg?.volunteers  || [];
+  S.assignments = cfg?.assignments || [];
+  S.supaUrl     = cfg?.supaUrl     || "";
+  S.supaKey     = cfg?.supaKey     || "";
+  S.volunteer   = cfg?.volunteer   || "";
+  S.volunteerId = cfg?.volunteerId || "";
 
   const pendingCfg = location.hash.startsWith("#cfg=") ? location.hash.slice(5) : "";
   if (pendingCfg) history.replaceState(null, "", location.pathname);
@@ -1070,8 +1274,8 @@ $("shareCfg").addEventListener("click", async () => {
   $("vol").value = S.volunteer;
   $("supaUrl").value = S.supaUrl;
   $("supaKey").value = S.supaKey;
-  drawSessions();
   if (pendingCfg) applyCfg(pendingCfg);
+  describeConf();
 
   S.people = await countPeople();
   if (S.people){
@@ -1085,7 +1289,10 @@ $("shareCfg").addEventListener("click", async () => {
   }
   checkReady();
 
-  if (S.people && S.volunteer && S.sessions.length){ drawStations(); go("s-station"); }
+  // A phone that is already configured goes straight to "who is using this
+  // phone?", because handsets change hands between shifts and the previous
+  // volunteer's name is the wrong default.
+  if (S.people && S.sessions.length){ drawWho(); go("s-who"); }
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(()=>{});
 })();
 </script>

@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attendance — admin</title>
+<style>
+:root{
+  --ink:#0E1A24; --surface:#16242F; --raised:#1F3140; --line:#2C4152;
+  --text:#F2F5F7; --muted:#8FA3B0;
+  --ok:#2FBF71; --warn:#F2A73B; --bad:#E5484D; --accent:#58B8E8;
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--ink);color:var(--text);
+  font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:15px;line-height:1.45;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 18px 80px}
+h1{font-size:24px;font-weight:650;letter-spacing:-.02em;margin:0 0 4px}
+h2{font-size:16px;font-weight:620;margin:28px 0 10px}
+h2:first-child{margin-top:0}
+.sub{color:var(--muted);margin:0 0 22px}
+.note{font-size:13px;color:var(--muted)}
+.bad-text{color:var(--bad)}
+.ok-text{color:var(--ok)}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+input,select{
+  font:inherit;color:var(--text);background:var(--surface);
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;width:100%;
+}
+input[type=checkbox]{width:auto;accent-color:var(--accent);transform:scale(1.25)}
+input:focus,select:focus,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  min-height:40px;border-radius:10px;background:var(--accent);color:#06131C;
+  font-weight:640;padding:0 15px;white-space:nowrap;
+}
+.btn.sec{background:var(--raised);color:var(--text);border:1px solid var(--line)}
+.btn.danger{background:transparent;color:var(--bad);border:1px solid var(--line)}
+.btn.sm{min-height:32px;padding:0 11px;font-size:13.5px}
+.btn[disabled]{opacity:.45;cursor:default}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.field{margin-bottom:12px}
+.field label{display:block;font-size:13px;color:var(--muted);margin-bottom:5px}
+
+.screen{display:none}
+.screen.on{display:block}
+.tabpane{display:none}
+.tabpane.on{display:block}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:16px}
+.login{max-width:380px;margin:12vh auto}
+
+.bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;
+  border-bottom:1px solid var(--line);padding-bottom:14px}
+.bar .grow{flex:1;min-width:0}
+.live{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+.dot.stale{background:var(--warn)}
+.dot.off{background:var(--bad)}
+
+.tabs{display:flex;gap:4px;overflow-x:auto;margin:14px 0 22px;
+  border-bottom:1px solid var(--line);padding-bottom:0}
+.tab{padding:10px 15px;border-radius:9px 9px 0 0;color:var(--muted);
+  font-weight:600;font-size:14.5px;border-bottom:2px solid transparent;white-space:nowrap}
+.tab.on{color:var(--text);border-bottom-color:var(--accent);background:var(--surface)}
+
+.tiles{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(175px,1fr))}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:14px 16px}
+.tile .k{font-size:12.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.tile .v{font-size:29px;font-weight:680;font-variant-numeric:tabular-nums;line-height:1.15;margin-top:4px}
+
+table{width:100%;border-collapse:collapse;font-size:14.5px}
+th{text-align:left;font-weight:600;color:var(--muted);font-size:12.5px;
+  text-transform:uppercase;letter-spacing:.05em;padding:0 9px 8px;white-space:nowrap}
+td{padding:8px 9px;border-top:1px solid var(--line);vertical-align:middle}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+.scroll{overflow-x:auto}
+tr.now td{background:rgba(88,184,232,.07)}
+tr.gap td{background:rgba(229,72,77,.09)}
+
+.bar-track{height:7px;border-radius:4px;background:var(--raised);overflow:hidden;min-width:80px}
+.bar-fill{height:100%;background:var(--accent);border-radius:4px}
+.bar-fill.high{background:var(--ok)}
+.bar-fill.low{background:var(--warn)}
+
+.tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;font-weight:600}
+.tag.live{background:rgba(47,191,113,.18);color:var(--ok)}
+.tag.done{background:var(--raised);color:var(--muted)}
+.tag.soon{background:rgba(88,184,232,.15);color:var(--accent)}
+.tag.gap{background:rgba(229,72,77,.18);color:var(--bad)}
+.tag.off{background:var(--raised);color:var(--muted)}
+
+.mono{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;letter-spacing:.05em}
+.empty{color:var(--muted);padding:20px 0;text-align:center}
+.hint{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:0 10px 10px 0;padding:11px 14px;margin:0 0 18px;font-size:13.5px;color:var(--muted)}
+.hint b{color:var(--text)}
+
+.grid-days{display:grid;gap:3px;grid-template-columns:minmax(190px,1.4fr) repeat(var(--ndays),minmax(42px,1fr))}
+.grid-days .hd{font-size:11.5px;color:var(--muted);text-align:center;padding:5px 2px;line-height:1.2}
+.grid-days .rowlab{font-size:13.5px;padding:7px 8px;background:var(--surface);
+  border-radius:8px 0 0 8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grid-days .cell{display:flex;align-items:center;justify-content:center;
+  background:var(--surface);padding:6px 0}
+.grid-days .cell:last-child{border-radius:0 8px 8px 0}
+
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;
+  background:var(--raised);border:1px solid var(--line);font-size:13px}
+.chip.on{background:rgba(88,184,232,.16);border-color:var(--accent);color:var(--text)}
+.chip .x{color:var(--muted);font-size:15px;line-height:1}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:24px;z-index:50;
+  background:var(--raised);border:1px solid var(--line);border-radius:11px;
+  padding:11px 18px;font-size:14px;box-shadow:0 8px 28px rgba(0,0,0,.4);display:none}
+.toast.on{display:block}
+.toast.bad{border-color:var(--bad);color:var(--bad)}
+</style>
+</head>
+<body>
+
+<!-- ============ LOGIN ============ -->
+<section id="s-login" class="screen on">
+  <div class="wrap">
+    <div class="card login">
+      <h1>Attendance admin</h1>
+      <p class="sub">Organiser sign-in.</p>
+      <div class="field">
+        <label for="url">Project URL</label>
+        <input id="url" placeholder="https://xxxx.supabase.co" inputmode="url" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="key">Publishable key</label>
+        <input id="key" placeholder="sb_publishable_…" autocapitalize="off" spellcheck="false">
+      </div>
+      <div class="field">
+        <label for="email">Email</label>
+        <input id="email" type="email" autocomplete="username" autocapitalize="off">
+      </div>
+      <div class="field">
+        <label for="pw">Password</label>
+        <input id="pw" type="password" autocomplete="current-password">
+      </div>
+      <button class="btn" id="loginBtn" style="width:100%">Sign in</button>
+      <p class="note bad-text" id="loginErr"></p>
+      <p class="note">This key is the same public one the phones carry. It grants
+        nothing on its own — configuring the event and reading the roll both
+        require an account listed in <span class="mono">organisers</span>.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ ADMIN ============ -->
+<section id="s-admin" class="screen">
+  <div class="wrap">
+    <div class="bar">
+      <div class="grow">
+        <h1 style="margin:0">Attendance admin</h1>
+        <span class="live"><i class="dot" id="liveDot"></i><span id="liveText">connecting…</span></span>
+      </div>
+      <div class="row">
+        <select id="dayPick" style="width:auto;min-width:170px"></select>
+        <button class="btn sec" id="refreshBtn">Refresh</button>
+        <button class="btn sec" id="outBtn">Sign out</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab on" data-tab="live">Live</button>
+      <button class="tab" data-tab="sessions">Sessions</button>
+      <button class="tab" data-tab="calendar">Calendar</button>
+      <button class="tab" data-tab="volunteers">Volunteers</button>
+      <button class="tab" data-tab="assign">Assignments</button>
+      <button class="tab" data-tab="export">Export</button>
+    </div>
+
+    <!-- ---------------- LIVE ---------------- -->
+    <div class="tabpane on" data-pane="live">
+      <div class="tiles">
+        <div class="tile"><div class="k">Participants linked</div><div class="v" id="tLinked">—</div></div>
+        <div class="tile"><div class="k">Scans this day</div><div class="v" id="tScans">—</div></div>
+        <div class="tile"><div class="k">Badges issued</div><div class="v" id="tIssued">—</div></div>
+        <div class="tile"><div class="k">Reissued / void</div><div class="v" id="tVoid">—</div></div>
+      </div>
+
+      <h2>Sessions today</h2>
+      <div class="scroll">
+        <table id="liveTable">
+          <thead><tr>
+            <th>Session</th><th>Venue</th><th>Time</th><th>On the door</th>
+            <th class="num">Present</th><th class="num">Of</th><th style="width:140px">Turnout</th><th></th>
+          </tr></thead>
+          <tbody id="liveBody"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="liveEmpty" style="display:none">
+        Nothing scheduled for this day. Add sessions, then tick them on the Calendar tab.
+      </p>
+
+      <h2>Absentees</h2>
+      <div class="row" style="margin-bottom:12px">
+        <select id="absSess" style="width:auto;min-width:230px"></select>
+        <button class="btn sec" id="absBtn">Show</button>
+        <button class="btn sec" id="absCsv" disabled>Download CSV</button>
+      </div>
+      <div class="scroll">
+        <table id="absTable" style="display:none">
+          <thead><tr><th>Name</th><th>Participant ID</th><th>Badge</th></tr></thead>
+          <tbody id="absBody"></tbody>
+        </table>
+      </div>
+      <p class="note" id="absNote"></p>
+    </div>
+
+    <!-- ---------------- SESSIONS ---------------- -->
+    <div class="tabpane" data-pane="sessions">
+      <p class="hint">
+        A session is <b>a door at a time</b>. Two sessions may run at once — that
+        is what assignments are for. The <b>id</b> is what lands on every scan
+        and is shared across all ten days, so keep it short and never reuse one
+        for a different thing. Changing a time here does not move scans already
+        recorded.
+      </p>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th style="min-width:130px">Id</th><th style="min-width:160px">Name</th>
+            <th style="min-width:140px">Venue</th><th>Starts</th><th>Ends</th><th></th>
+          </tr></thead>
+          <tbody id="sessBody"></tbody>
+        </table>
+      </div>
+      <h2>Add a session</h2>
+      <div class="row">
+        <input id="nsId" placeholder="id, e.g. pray-am" style="max-width:160px" autocapitalize="off" spellcheck="false">
+        <input id="nsName" placeholder="Name" style="max-width:190px">
+        <input id="nsVenue" placeholder="Venue" style="max-width:170px">
+        <input id="nsStart" type="time" value="09:00" style="max-width:130px">
+        <input id="nsEnd" type="time" value="10:00" style="max-width:130px">
+        <button class="btn" id="addSess">Add</button>
+      </div>
+      <p class="note" id="sessNote"></p>
+    </div>
+
+    <!-- ---------------- CALENDAR ---------------- -->
+    <div class="tabpane" data-pane="calendar">
+      <p class="hint">
+        Which days each session actually runs. Arrival day and departure day
+        rarely look like the eight in between. Unticking a day does
+        <b>not</b> delete scans already recorded against it — it only stops the
+        session being expected, counted or reported as having absentees.
+      </p>
+      <div class="row" style="margin-bottom:16px">
+        <label class="note" for="calStart">Event starts</label>
+        <input id="calStart" type="date" style="max-width:180px">
+        <label class="note" for="calDays">Days</label>
+        <input id="calDays" type="number" min="1" max="40" value="10" style="max-width:90px">
+        <button class="btn sec" id="calBuild">Show calendar</button>
+      </div>
+      <div class="scroll"><div class="grid-days" id="calGrid"></div></div>
+      <p class="note" id="calNote"></p>
+    </div>
+
+    <!-- ---------------- VOLUNTEERS ---------------- -->
+    <div class="tabpane" data-pane="volunteers">
+      <p class="hint">
+        The phones download this list and a volunteer taps their own name at the
+        start of a shift. No passwords — these are shared handsets and a password
+        reset at 6am in a field is not a support model. Deactivating someone
+        hides them from phones that sync afterwards; it does not touch scans
+        they already recorded.
+      </p>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th style="min-width:120px">Id</th><th style="min-width:170px">Name</th>
+            <th style="min-width:140px">Phone</th><th>Active</th><th class="num">Assigned</th><th></th>
+          </tr></thead>
+          <tbody id="volBody"></tbody>
+        </table>
+      </div>
+      <h2>Add a volunteer</h2>
+      <div class="row">
+        <input id="nvName" placeholder="Name" style="max-width:210px">
+        <input id="nvPhone" placeholder="Phone (optional)" style="max-width:180px" inputmode="tel">
+        <button class="btn" id="addVol">Add</button>
+      </div>
+      <p class="note" id="volNote"></p>
+    </div>
+
+    <!-- ---------------- ASSIGNMENTS ---------------- -->
+    <div class="tabpane" data-pane="assign">
+      <p class="hint">
+        Who stands at which door, for the day selected at the top.
+        <b>This is what separates two sessions running at the same time.</b>
+        A scan counts toward the session the volunteer was assigned to, not
+        toward whatever the clock suggests. A session with nobody assigned is
+        flagged below — that is the thing worth checking at 5am.
+      </p>
+      <div id="assignList"></div>
+      <p class="empty" id="assignEmpty" style="display:none">
+        Nothing scheduled for this day. Add sessions and tick them on the Calendar tab.
+      </p>
+      <p class="note" id="assignNote"></p>
+    </div>
+
+    <!-- ---------------- EXPORT ---------------- -->
+    <div class="tabpane" data-pane="export">
+      <h2>Download</h2>
+      <div class="row">
+        <button class="btn sec" id="expScans">Scans for this day</button>
+        <button class="btn sec" id="expAllScans">All scans</button>
+        <button class="btn sec" id="expLinks">Badge links</button>
+        <button class="btn sec" id="expRoll">Participant roll</button>
+        <button class="btn sec" id="expAssign">Assignments</button>
+      </div>
+      <p class="note" id="expNote"></p>
+      <h2>Setup payload for the phones</h2>
+      <p class="note" style="margin-bottom:10px">
+        Paste this into a volunteer's phone with <b>Paste setup from another
+        phone</b>. It carries the project URL and publishable key only — the
+        phone pulls the schedule, the roster and the assignments from the
+        server itself, so this string does not go stale when you change them
+        here.
+      </p>
+      <div class="row">
+        <button class="btn" id="copyCfg">Copy setup code</button>
+        <button class="btn sec" id="copyCfgLink">Copy setup link</button>
+      </div>
+      <p class="note" id="cfgNote"></p>
+    </div>
+  </div>
+</section>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* ------------------------------------------------------------------ *
+ * No dependencies, same as the scanner. Supabase Auth and PostgREST are
+ * both plain HTTP, so signing in, reading and writing are fetch and
+ * nothing else.
+ * ------------------------------------------------------------------ */
+
+const $ = id => document.getElementById(id);
+const A = { url:"", key:"", token:"", refresh:"", expires:0, email:"" };
+const POLL = 20000;
+let poller = null, absRows = [], tab = "live";
+
+const REMEMBER = "attendance.organiser";   // connection details only, never the token
+
+/* ---------------------------------------------------------------- http */
+
+function api(path, opts = {}){
+  return fetch(A.url.replace(/\/+$/,"") + path, {
+    ...opts,
+    headers: {
+      "apikey": A.key,
+      "Authorization": "Bearer " + (A.token || A.key),
+      "Content-Type": "application/json",
+      ...(opts.headers || {})
+    }
+  });
+}
+
+async function rest(path){
+  const res = await api("/rest/v1" + path);
+  if (res.status === 401 || res.status === 403)
+    throw new Error("Not authorised. Is your account in the organisers table?");
+  if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=> "")}`);
+  return res.json();
+}
+
+/* Every write goes through here so that a failure is always shown rather
+   than silently doing nothing -- an admin who thinks they saved a change
+   and did not is worse off than one who sees an error. */
+async function write(method, path, body, prefer){
+  await ensureToken();
+  const res = await api("/rest/v1" + path, {
+    method,
+    headers: prefer ? { "Prefer": prefer } : {},
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  if (!res.ok){
+    const detail = await res.text().catch(()=> "");
+    throw new Error(`${res.status} ${detail}`.slice(0, 200));
+  }
+  return res;
+}
+
+async function signIn(email, password){
+  const res = await fetch(A.url.replace(/\/+$/,"") + "/auth/v1/token?grant_type=password", {
+    method:"POST",
+    headers:{ "apikey":A.key, "Content-Type":"application/json" },
+    body: JSON.stringify({ email, password })
+  });
+  const body = await res.json().catch(()=> ({}));
+  if (!res.ok) throw new Error(body.error_description || body.msg || "Sign-in failed.");
+  A.token = body.access_token;
+  A.refresh = body.refresh_token;
+  A.expires = Date.now() + (body.expires_in || 3600) * 1000;
+  A.email = body.user?.email || email;
+}
+
+async function refreshToken(){
+  if (!A.refresh) return false;
+  const res = await fetch(A.url.replace(/\/+$/,"") + "/auth/v1/token?grant_type=refresh_token", {
+    method:"POST",
+    headers:{ "apikey":A.key, "Content-Type":"application/json" },
+    body: JSON.stringify({ refresh_token: A.refresh })
+  });
+  if (!res.ok) return false;
+  const b = await res.json();
+  A.token = b.access_token; A.refresh = b.refresh_token;
+  A.expires = Date.now() + (b.expires_in || 3600) * 1000;
+  return true;
+}
+
+/* An admin leaves this open all day; the hour-long token must not quietly
+   expire behind a "Not authorised" that reads like a permissions bug. */
+async function ensureToken(){
+  if (A.expires && Date.now() > A.expires - 120000) await refreshToken();
+}
+
+/* ---------------------------------------------------------------- state */
+
+const D = {
+  sessions:[], days:[], byDay:{}, day:"",
+  volunteers:[], assignments:[], rows:[], totals:{}
+};
+
+const fmtDay = d => new Date(d + "T00:00:00")
+  .toLocaleDateString([], { weekday:"short", day:"numeric", month:"short" });
+const shortDay = d => new Date(d + "T00:00:00")
+  .toLocaleDateString([], { day:"numeric", month:"short" });
+const today = () => new Date().toISOString().slice(0,10);
+const nowMin = () => { const d = new Date(); return d.getHours()*60 + d.getMinutes(); };
+const toMin = t => { const [h,m] = String(t).split(":").map(Number); return h*60 + m; };
+const hhmm = t => String(t).slice(0,5);
+
+const esc = s => String(s ?? "").replace(/[&<>"]/g,
+  c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+
+let toastTimer = null;
+function toast(msg, bad){
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = "toast on" + (bad ? " bad" : "");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.className = "toast", bad ? 5000 : 2200);
+}
+
+/* ---------------------------------------------------------------- load */
+
+async function loadConfig(){
+  const [sessions, days, volunteers] = await Promise.all([
+    rest("/sessions?select=id,name,venue,starts,ends&order=starts"),
+    rest("/session_days?select=session_id,day&order=day"),
+    rest("/volunteers?select=id,name,phone,active&order=name")
+  ]);
+  D.sessions = sessions;
+  D.volunteers = volunteers;
+  D.days = [...new Set(days.map(d => d.day))].sort();
+  D.byDay = days.reduce((m, r) => ((m[r.day] = m[r.day] || []).push(r.session_id), m), {});
+}
+
+async function head(path){
+  const res = await api("/rest/v1" + path, {
+    headers: { "Prefer":"count=exact", "Range":"0-0" }
+  });
+  if (!res.ok) return 0;
+  return +((res.headers.get("content-range") || "").split("/")[1] || 0) || 0;
+}
+
+async function loadDay(day){
+  const [counts, assignments] = await Promise.all([
+    rest(`/attendance_by_session?select=session_id,present&day=eq.${day}`),
+    rest(`/assignments?select=volunteer_id,session_id,day&day=eq.${day}`)
+  ]);
+  const present = Object.fromEntries(counts.map(c => [c.session_id, c.present]));
+  D.assignments = assignments;
+
+  const [linked, issued, voided, scans] = await Promise.all([
+    head("/participants?select=code&void=is.false&pid=not.is.null"),
+    head("/participants?select=code"),
+    head("/participants?select=code&void=is.true"),
+    head(`/scans?select=uuid&day=eq.${day}`)
+  ]);
+
+  D.day = day;
+  D.totals = { linked, issued, voided, scans };
+  D.rows = (D.byDay[day] || [])
+    .map(id => D.sessions.find(s => s.id === id))
+    .filter(Boolean)
+    .sort((a,b) => toMin(a.starts) - toMin(b.starts))
+    .map(s => ({ ...s, present: present[s.id] || 0 }));
+}
+
+const volName = id => (D.volunteers.find(v => v.id === id) || {}).name || id;
+const assignedTo = sid => D.assignments
+  .filter(a => a.session_id === sid).map(a => a.volunteer_id);
+
+/* ---------------------------------------------------------------- live */
+
+function renderLive(){
+  $("tLinked").textContent = D.totals.linked.toLocaleString();
+  $("tScans").textContent  = D.totals.scans.toLocaleString();
+  $("tIssued").textContent = D.totals.issued.toLocaleString();
+  $("tVoid").textContent   = D.totals.voided.toLocaleString();
+
+  const body = $("liveBody");
+  body.innerHTML = "";
+  $("liveEmpty").style.display = D.rows.length ? "none" : "block";
+  $("liveTable").style.display = D.rows.length ? "" : "none";
+
+  const expected = D.totals.linked;
+  const isToday = D.day === today();
+  const m = nowMin();
+
+  for (const r of D.rows){
+    const pct = expected ? Math.min(100, Math.round(r.present / expected * 100)) : 0;
+    const live = isToday && m >= toMin(r.starts) - 20 && m <= toMin(r.ends) + 20;
+    const past = isToday ? m > toMin(r.ends) + 20 : D.day < today();
+    const on = assignedTo(r.id);
+
+    const tr = document.createElement("tr");
+    tr.className = live ? "now" : on.length ? "" : "gap";
+    tr.innerHTML = `
+      <td><b>${esc(r.name)}</b></td>
+      <td>${esc(r.venue)}</td>
+      <td class="mono">${hhmm(r.starts)}–${hhmm(r.ends)}</td>
+      <td>${on.length
+            ? esc(on.map(volName).join(", "))
+            : '<span class="tag gap">nobody assigned</span>'}</td>
+      <td class="num"><b>${r.present.toLocaleString()}</b></td>
+      <td class="num" style="color:var(--muted)">${expected.toLocaleString()}</td>
+      <td>
+        <div class="row" style="gap:8px;flex-wrap:nowrap">
+          <div class="bar-track" style="flex:1">
+            <div class="bar-fill ${pct >= 80 ? "high" : pct >= 40 ? "" : "low"}" style="width:${pct}%"></div>
+          </div>
+          <span class="note" style="min-width:36px;text-align:right">${pct}%</span>
+        </div>
+      </td>
+      <td>${live ? '<span class="tag live">live</span>'
+                 : past ? '<span class="tag done">done</span>'
+                        : '<span class="tag soon">upcoming</span>'}</td>`;
+    body.appendChild(tr);
+  }
+
+  const sel = $("absSess"), keep = sel.value;
+  sel.innerHTML = D.rows.map(r =>
+    `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.venue)}</option>`).join("");
+  if (keep && D.rows.some(r => r.id === keep)) sel.value = keep;
+}
+
+/* ---------------------------------------------------------------- sessions */
+
+function renderSessions(){
+  const body = $("sessBody");
+  body.innerHTML = "";
+  for (const s of D.sessions){
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="mono" style="color:var(--muted)">${esc(s.id)}</td>
+      <td><input value="${esc(s.name)}" data-f="name"></td>
+      <td><input value="${esc(s.venue)}" data-f="venue"></td>
+      <td><input type="time" value="${hhmm(s.starts)}" data-f="starts"></td>
+      <td><input type="time" value="${hhmm(s.ends)}" data-f="ends"></td>
+      <td><button class="btn danger sm" data-del>Delete</button></td>`;
+
+    tr.querySelectorAll("[data-f]").forEach(inp => {
+      inp.addEventListener("change", async () => {
+        try{
+          await write("PATCH", `/sessions?id=eq.${encodeURIComponent(s.id)}`,
+                      { [inp.dataset.f]: inp.value });
+          s[inp.dataset.f] = inp.value;
+          toast("Saved.");
+          renderLive();
+        }catch(e){ toast(e.message, true); }
+      });
+    });
+
+    tr.querySelector("[data-del]").addEventListener("click", async () => {
+      if (!confirm(
+        `Delete the session "${s.name}"?\n\n` +
+        `Its calendar days and assignments go too. Scans already recorded ` +
+        `against "${s.id}" are NOT deleted, but nothing will describe them.`)) return;
+      try{
+        await write("DELETE", `/sessions?id=eq.${encodeURIComponent(s.id)}`);
+        await reloadAll();
+        toast("Session deleted.");
+      }catch(e){ toast(e.message, true); }
+    });
+    body.appendChild(tr);
+  }
+}
+
+$("addSess").addEventListener("click", async () => {
+  const id = $("nsId").value.trim().toLowerCase().replace(/[^a-z0-9-]/g, "-");
+  const name = $("nsName").value.trim(), venue = $("nsVenue").value.trim();
+  const note = $("sessNote");
+  note.classList.remove("bad-text");
+  if (!id || !name || !venue){
+    note.textContent = "Id, name and venue are all needed.";
+    note.classList.add("bad-text");
+    return;
+  }
+  if (D.sessions.some(s => s.id === id)){
+    note.textContent = `There is already a session called "${id}".`;
+    note.classList.add("bad-text");
+    return;
+  }
+  try{
+    await write("POST", "/sessions", [{
+      id, name, venue, starts: $("nsStart").value, ends: $("nsEnd").value
+    }], "return=minimal");
+    $("nsId").value = $("nsName").value = $("nsVenue").value = "";
+    note.textContent = "Added. Tick the days it runs on the Calendar tab.";
+    await reloadAll();
+  }catch(e){ note.textContent = e.message; note.classList.add("bad-text"); }
+});
+
+$("nsName").addEventListener("input", () => {
+  // Suggest an id, but let it be overridden -- the id is permanent and the
+  // name is not, so guessing it from the name is a convenience, not a rule.
+  if (!$("nsId").dataset.touched)
+    $("nsId").value = $("nsName").value.trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24);
+});
+$("nsId").addEventListener("input", () => { $("nsId").dataset.touched = "1"; });
+
+/* ---------------------------------------------------------------- calendar */
+
+function calendarDays(){
+  const start = $("calStart").value || D.days[0] || today();
+  const n = Math.max(1, Math.min(40, +$("calDays").value || 10));
+  const out = [];
+  for (let i = 0; i < n; i++){
+    const d = new Date(start + "T00:00:00");
+    d.setDate(d.getDate() + i);
+    out.push(d.toISOString().slice(0,10));
+  }
+  return out;
+}
+
+function renderCalendar(){
+  const days = calendarDays();
+  const grid = $("calGrid");
+  grid.style.setProperty("--ndays", days.length);
+  grid.innerHTML = "";
+
+  grid.insertAdjacentHTML("beforeend", `<div class="hd"></div>`);
+  days.forEach((d, i) => grid.insertAdjacentHTML("beforeend",
+    `<div class="hd">${i + 1}<br>${esc(shortDay(d))}</div>`));
+
+  if (!D.sessions.length){
+    $("calNote").textContent = "No sessions yet — add some on the Sessions tab.";
+    return;
+  }
+  $("calNote").textContent = "";
+
+  for (const s of D.sessions){
+    grid.insertAdjacentHTML("beforeend",
+      `<div class="rowlab" title="${esc(s.name)} · ${esc(s.venue)}">${esc(s.name)}
+         <span class="note">· ${esc(hhmm(s.starts))}</span></div>`);
+    for (const day of days){
+      const cell = document.createElement("div");
+      cell.className = "cell";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = (D.byDay[day] || []).includes(s.id);
+      box.addEventListener("change", async () => {
+        box.disabled = true;
+        try{
+          if (box.checked){
+            await write("POST", "/session_days",
+                        [{ session_id:s.id, day }], "resolution=ignore-duplicates,return=minimal");
+            (D.byDay[day] = D.byDay[day] || []).push(s.id);
+            if (!D.days.includes(day)){ D.days.push(day); D.days.sort(); fillDayPicker(); }
+          } else {
+            await write("DELETE",
+              `/session_days?session_id=eq.${encodeURIComponent(s.id)}&day=eq.${day}`);
+            D.byDay[day] = (D.byDay[day] || []).filter(x => x !== s.id);
+          }
+          if (day === D.day) await refreshDay();
+        }catch(e){
+          box.checked = !box.checked;
+          toast(e.message, true);
+        }
+        box.disabled = false;
+      });
+      cell.appendChild(box);
+      grid.appendChild(cell);
+    }
+  }
+}
+
+$("calBuild").addEventListener("click", renderCalendar);
+
+/* ---------------------------------------------------------------- volunteers */
+
+function renderVolunteers(){
+  const body = $("volBody");
+  body.innerHTML = "";
+  for (const v of D.volunteers){
+    const count = D.assignments.filter(a => a.volunteer_id === v.id).length;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td class="mono" style="color:var(--muted)">${esc(v.id)}</td>
+      <td><input value="${esc(v.name)}" data-f="name"></td>
+      <td><input value="${esc(v.phone || "")}" data-f="phone" inputmode="tel"></td>
+      <td><input type="checkbox" data-active ${v.active ? "checked" : ""}></td>
+      <td class="num">${count}</td>
+      <td><button class="btn danger sm" data-del>Delete</button></td>`;
+
+    tr.querySelectorAll("[data-f]").forEach(inp => {
+      inp.addEventListener("change", async () => {
+        try{
+          await write("PATCH", `/volunteers?id=eq.${encodeURIComponent(v.id)}`,
+                      { [inp.dataset.f]: inp.value });
+          v[inp.dataset.f] = inp.value;
+          toast("Saved.");
+        }catch(e){ toast(e.message, true); }
+      });
+    });
+
+    const box = tr.querySelector("[data-active]");
+    box.addEventListener("change", async () => {
+      try{
+        await write("PATCH", `/volunteers?id=eq.${encodeURIComponent(v.id)}`,
+                    { active: box.checked });
+        v.active = box.checked;
+        toast(box.checked ? "Active." : "Deactivated — phones will stop listing them.");
+      }catch(e){ box.checked = !box.checked; toast(e.message, true); }
+    });
+
+    tr.querySelector("[data-del]").addEventListener("click", async () => {
+      if (!confirm(
+        `Delete ${v.name}?\n\n` +
+        `Their assignments go too. Scans they already recorded are kept and ` +
+        `still carry their name.\n\n` +
+        `If they have simply finished their shift, untick Active instead.`)) return;
+      try{
+        await write("DELETE", `/volunteers?id=eq.${encodeURIComponent(v.id)}`);
+        await reloadAll();
+        toast("Volunteer deleted.");
+      }catch(e){ toast(e.message, true); }
+    });
+    body.appendChild(tr);
+  }
+}
+
+$("addVol").addEventListener("click", async () => {
+  const name = $("nvName").value.trim();
+  const note = $("volNote");
+  note.classList.remove("bad-text");
+  if (!name){
+    note.textContent = "A name is needed.";
+    note.classList.add("bad-text");
+    return;
+  }
+  // Readable ids beat opaque ones when they turn up in an exported CSV.
+  const base = "v-" + (name.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+                           .replace(/^-|-$/g, "").slice(0, 18) || "volunteer");
+  let id = base, n = 2;
+  while (D.volunteers.some(v => v.id === id)) id = `${base}-${n++}`;
+  try{
+    await write("POST", "/volunteers",
+                [{ id, name, phone: $("nvPhone").value.trim() || null }], "return=minimal");
+    $("nvName").value = $("nvPhone").value = "";
+    note.textContent = `Added as ${id}.`;
+    await reloadAll();
+  }catch(e){ note.textContent = e.message; note.classList.add("bad-text"); }
+});
+
+/* ---------------------------------------------------------------- assignments */
+
+function renderAssignments(){
+  const box = $("assignList");
+  box.innerHTML = "";
+  $("assignEmpty").style.display = D.rows.length ? "none" : "block";
+
+  if (!D.volunteers.length){
+    $("assignNote").textContent = "No volunteers yet — add some on the Volunteers tab.";
+    return;
+  }
+  $("assignNote").textContent = "";
+
+  for (const s of D.rows){
+    const on = new Set(assignedTo(s.id));
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.marginBottom = "12px";
+    card.innerHTML = `
+      <div class="row" style="justify-content:space-between;margin-bottom:11px">
+        <div>
+          <b>${esc(s.name)}</b>
+          <span class="note">· ${esc(s.venue)} · ${esc(hhmm(s.starts))}–${esc(hhmm(s.ends))}</span>
+        </div>
+        ${on.size ? `<span class="tag live">${on.size} assigned</span>`
+                  : `<span class="tag gap">nobody assigned</span>`}
+      </div>
+      <div class="chips"></div>`;
+
+    const chips = card.querySelector(".chips");
+    for (const v of D.volunteers){
+      if (!v.active && !on.has(v.id)) continue;      // hide retired unless already on
+      const chip = document.createElement("button");
+      chip.className = "chip" + (on.has(v.id) ? " on" : "");
+      chip.textContent = v.name + (v.active ? "" : " (inactive)");
+      chip.addEventListener("click", async () => {
+        chip.disabled = true;
+        const adding = !on.has(v.id);
+        try{
+          if (adding){
+            await write("POST", "/assignments",
+              [{ volunteer_id:v.id, session_id:s.id, day:D.day }],
+              "resolution=ignore-duplicates,return=minimal");
+            D.assignments.push({ volunteer_id:v.id, session_id:s.id, day:D.day });
+          } else {
+            await write("DELETE",
+              `/assignments?volunteer_id=eq.${encodeURIComponent(v.id)}` +
+              `&session_id=eq.${encodeURIComponent(s.id)}&day=eq.${D.day}`);
+            D.assignments = D.assignments.filter(
+              a => !(a.volunteer_id === v.id && a.session_id === s.id));
+          }
+          renderAssignments();
+          renderLive();
+          renderVolunteers();
+        }catch(e){ toast(e.message, true); chip.disabled = false; }
+      });
+      chips.appendChild(chip);
+    }
+    box.appendChild(card);
+  }
+}
+
+/* ---------------------------------------------------------------- export */
+
+function download(name, text){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type:"text/csv" }));
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+const cell = v => {
+  const s = String(v ?? "");
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+const toCsv = (cols, rows) =>
+  cols.join(",") + "\n" + rows.map(r => cols.map(c => cell(r[c])).join(",")).join("\n") + "\n";
+
+/* PostgREST caps a response at its configured limit, so page explicitly
+   rather than silently exporting the first 1000 rows of a 10,000-row day. */
+async function fetchAll(path){
+  const out = [], PAGE = 1000;
+  for (let from = 0; ; from += PAGE){
+    const res = await api("/rest/v1" + path, {
+      headers: { "Range-Unit":"items", "Range": `${from}-${from + PAGE - 1}` }
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=> "")}`);
+    const page = await res.json();
+    out.push(...page);
+    if (page.length < PAGE) break;
+  }
+  return out;
+}
+
+async function exportCsv(label, path, cols, filename){
+  const note = $("expNote");
+  note.textContent = `Fetching ${label}…`;
+  note.classList.remove("bad-text");
+  try{
+    await ensureToken();
+    const rows = await fetchAll(path);
+    download(filename, toCsv(cols, rows));
+    note.textContent = `${rows.length.toLocaleString()} rows exported.`;
+  }catch(e){ note.textContent = e.message; note.classList.add("bad-text"); }
+}
+
+const SCAN_COLS = ["code","session_id","session_name","venue","scanned_at","day",
+                   "volunteer","volunteer_id","assigned","device","source"];
+
+$("expScans").addEventListener("click", () => exportCsv(
+  "scans", `/scans?select=${SCAN_COLS}&day=eq.${D.day}&order=scanned_at`,
+  SCAN_COLS, `scans-${D.day}.csv`));
+
+$("expAllScans").addEventListener("click", () => exportCsv(
+  "every scan", `/scans?select=${SCAN_COLS}&order=day,scanned_at`,
+  SCAN_COLS, "scans-all.csv"));
+
+$("expLinks").addEventListener("click", () => exportCsv(
+  "badge links",
+  "/badge_links?select=code,pid,name,replaces,linked_at,volunteer,device&order=linked_at",
+  ["code","pid","name","replaces","linked_at","volunteer","device"], "badge-links.csv"));
+
+$("expRoll").addEventListener("click", () => exportCsv(
+  "the roll", "/participants?select=code,serial,name,pid,void,linked_at&order=serial",
+  ["code","serial","name","pid","void","linked_at"], "participants.csv"));
+
+$("expAssign").addEventListener("click", () => exportCsv(
+  "assignments", "/assignments?select=day,session_id,volunteer_id&order=day,session_id",
+  ["day","session_id","volunteer_id"], "assignments.csv"));
+
+function cfgBlob(){
+  return btoa(JSON.stringify({ supaUrl:A.url, supaKey:A.key }));
+}
+async function copyText(text, note){
+  try{ await navigator.clipboard.writeText(text); $("cfgNote").textContent = note; }
+  catch(e){ prompt("Copy this:", text); }
+}
+$("copyCfg").addEventListener("click", () => copyText(cfgBlob(),
+  "Setup code copied. On the phone: Paste setup from another phone."));
+$("copyCfgLink").addEventListener("click", () => copyText(
+  location.origin + "/#cfg=" + cfgBlob(),
+  "Setup link copied. Opening it on a phone configures the scanner."));
+
+/* ---------------------------------------------------------------- absentees */
+
+$("absBtn").addEventListener("click", async () => {
+  const note = $("absNote"), sess = $("absSess").value;
+  if (!sess) return;
+  note.textContent = "Working…"; note.classList.remove("bad-text");
+  $("absCsv").disabled = true;
+  try{
+    await ensureToken();
+    const res = await api("/rest/v1/rpc/absentees", {
+      method:"POST", body: JSON.stringify({ p_session: sess, p_day: D.day })
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text().catch(()=> "")}`);
+    absRows = await res.json();
+    $("absBody").innerHTML = absRows.slice(0, 500).map(r =>
+      `<tr><td>${esc(r.name || "—")}</td><td>${esc(r.pid || "—")}</td>
+           <td class="mono">${esc((r.code||"").slice(0,4) + "-" + (r.code||"").slice(4))}</td></tr>`).join("");
+    $("absTable").style.display = absRows.length ? "" : "none";
+    note.textContent = absRows.length
+      ? `${absRows.length.toLocaleString()} missing${absRows.length > 500 ? " — showing the first 500" : ""}.`
+      : "Nobody missing.";
+    $("absCsv").disabled = !absRows.length;
+  }catch(e){ note.textContent = e.message; note.classList.add("bad-text"); }
+});
+
+$("absCsv").addEventListener("click", () => download(
+  `absentees-${$("absSess").value}-${D.day}.csv`, toCsv(["code","pid","name"], absRows)));
+
+/* ---------------------------------------------------------------- shell */
+
+function setLive(state, text){
+  $("liveDot").className = "dot" + (state === "ok" ? "" : state === "stale" ? " stale" : " off");
+  $("liveText").textContent = text;
+}
+
+document.querySelectorAll(".tab").forEach(b => {
+  b.addEventListener("click", () => {
+    tab = b.dataset.tab;
+    document.querySelectorAll(".tab").forEach(x => x.classList.toggle("on", x === b));
+    document.querySelectorAll(".tabpane").forEach(p =>
+      p.classList.toggle("on", p.dataset.pane === tab));
+    if (tab === "calendar") renderCalendar();
+    if (tab === "assign") renderAssignments();
+    if (tab === "volunteers") renderVolunteers();
+    if (tab === "sessions") renderSessions();
+  });
+});
+
+function fillDayPicker(){
+  const sel = $("dayPick"), keep = sel.value;
+  const days = D.days.length ? D.days : [today()];
+  sel.innerHTML = days.map((d, i) =>
+    `<option value="${d}">Day ${i + 1} · ${fmtDay(d)}</option>`).join("");
+  sel.value = days.includes(keep) ? keep
+            : days.includes(today()) ? today() : days[0];
+}
+
+async function refreshDay(){
+  await loadDay($("dayPick").value);
+  renderLive();
+  if (tab === "assign") renderAssignments();
+  if (tab === "volunteers") renderVolunteers();
+}
+
+async function reloadAll(){
+  await loadConfig();
+  fillDayPicker();
+  await refreshDay();
+  renderSessions();
+  if (tab === "calendar") renderCalendar();
+  if (tab === "assign") renderAssignments();
+  if (tab === "volunteers") renderVolunteers();
+}
+
+async function tick(){
+  try{
+    await ensureToken();
+    await refreshDay();
+    setLive("ok", `updated ${new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit",second:"2-digit"})}`);
+  }catch(e){ setLive("off", e.message.slice(0, 90)); }
+}
+
+$("loginBtn").addEventListener("click", async () => {
+  const err = $("loginErr");
+  err.textContent = "";
+  A.url = $("url").value.trim();
+  A.key = $("key").value.trim();
+  if (!A.url || !A.key) return err.textContent = "Project URL and key are both needed.";
+  $("loginBtn").disabled = true;
+  try{
+    await signIn($("email").value.trim(), $("pw").value);
+    localStorage.setItem(REMEMBER, JSON.stringify(
+      { url:A.url, key:A.key, email:$("email").value.trim() }));
+    await start();
+  }catch(e){ err.textContent = e.message; }
+  finally{ $("loginBtn").disabled = false; }
+});
+
+$("pw").addEventListener("keydown", e => { if (e.key === "Enter") $("loginBtn").click(); });
+
+$("outBtn").addEventListener("click", () => {
+  clearInterval(poller);
+  A.token = A.refresh = ""; A.expires = 0;
+  $("pw").value = "";
+  $("s-admin").classList.remove("on");
+  $("s-login").classList.add("on");
+});
+
+$("dayPick").addEventListener("change", tick);
+$("refreshBtn").addEventListener("click", () => reloadAll().then(
+  () => toast("Reloaded."), e => toast(e.message, true)));
+
+async function start(){
+  $("s-login").classList.remove("on");
+  $("s-admin").classList.add("on");
+  setLive("stale", "loading…");
+  await loadConfig();
+  fillDayPicker();
+  $("calStart").value = D.days[0] || today();
+  $("calDays").value = Math.max(10, D.days.length || 10);
+  await tick();
+  renderSessions();
+  clearInterval(poller);
+  poller = setInterval(tick, POLL);
+}
+
+(function boot(){
+  try{
+    const saved = JSON.parse(localStorage.getItem(REMEMBER) || "{}");
+    if (saved.url)   $("url").value = saved.url;
+    if (saved.key)   $("key").value = saved.key;
+    if (saved.email) $("email").value = saved.email;
+  }catch(e){}
+  ($("email").value ? $("pw") : $("url")).focus();
+})();
+</script>
+</body>
+</html>

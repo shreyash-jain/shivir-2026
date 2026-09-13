@@ -28,7 +28,7 @@ import pytest
 from playwright.sync_api import sync_playwright
 
 from browser import (config_hash, launch, open_registration, open_station,
-                     type_into_scanner)
+                     pick_volunteer, type_into_scanner)
 from test_pairing import link
 
 STUB_PORT = 8792
@@ -166,13 +166,13 @@ def test_offline_then_reconnecting_drains_without_duplicates(server, badges, stu
 
         page.goto(f"{server}/#cfg={config_hash(**cfg(stub))}")
         page.wait_for_timeout(1800)
-        page.fill("#vol", "Test Volunteer")
-        page.wait_for_timeout(200)
-        page.click("#startBtn")
-        page.wait_for_timeout(400)
+        if page.is_visible("#s-setup"):
+            page.click("#startBtn")
+            page.wait_for_timeout(400)
+        pick_volunteer(page)
 
         ctx.set_offline(True)
-        page.click(".station:has-text('Prayer hall')")
+        page.click("#stationList .station:has-text('Morning prayer')")
         page.wait_for_timeout(1500)
 
         # Unlinked badges are refused, so they must not join the queue either.
