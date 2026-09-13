@@ -1336,7 +1336,18 @@ $("shareCfg").addEventListener("click", async () => {
   // phone?", because handsets change hands between shifts and the previous
   // volunteer's name is the wrong default.
   if (S.people && S.sessions.length){ drawWho(); go("s-who"); }
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  if ("serviceWorker" in navigator){
+    navigator.serviceWorker.register("./sw.js").catch(()=>{});
+    // A new version has taken over. Pick it up now if the phone is idle on a
+    // setup screen; if someone is scanning, leave them alone -- the next time
+    // the app is opened it will be current.
+    let hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController){ hadController = true; return; }   // first install, not an update
+      const idle = $("s-setup").classList.contains("on") || $("s-who").classList.contains("on");
+      if (idle) location.reload();
+    });
+  }
 })();
 </script>
 </body>

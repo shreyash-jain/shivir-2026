@@ -3,8 +3,8 @@
 # Assemble the deployable site into dist/.
 #
 # This is NOT a build step for the scanner -- every file is copied verbatim,
-# nothing is compiled, bundled or minified, and dist/scanner is byte-identical
-# to scanner/. It exists only to decide what gets published: the app and the
+# nothing is compiled, bundled or minified. The one exception is a twelve
+# character build stamp substituted into sw.js so phones notice a new version. It exists only to decide what gets published: the app and the
 # dashboard, and none of the docs, tests or tooling.
 #
 #   dist/            <- scanner/, so volunteers get a bare URL
@@ -23,7 +23,13 @@ mkdir -p "$OUT/dashboard" "$OUT/admin"
 # The scanner, at the root of the site.
 cp "$ROOT/scanner/index.html"    "$OUT/"
 cp "$ROOT/scanner/jsQR.min.js"   "$OUT/"
-cp "$ROOT/scanner/sw.js"         "$OUT/"
+# Stamp the service worker with a hash of what it caches. A changed stamp is
+# what makes a phone that already has the app pick up the new version; a
+# fixed name meant the first version ever loaded was the last one it saw.
+STAMP=$(cat "$ROOT/scanner/index.html" "$ROOT/scanner/sw.js" "$ROOT/scanner/jsQR.min.js" \
+        | shasum -a 256 | cut -c1-12)
+sed "s/__BUILD__/$STAMP/" "$ROOT/scanner/sw.js" > "$OUT/sw.js"
+echo "service worker cache: attendance-$STAMP"
 cp "$ROOT/scanner/manifest.json" "$OUT/"
 cp "$ROOT/scanner/icon.svg"      "$OUT/"
 
