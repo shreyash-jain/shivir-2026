@@ -3,9 +3,12 @@
   "appName": "Attendance",
   "webDir": "www",
   "android": {
-    "allowMixedContent": false
+    "allowMixedContent": false,
+    "adjustMarginsForEdgeToEdge": "force",
+    "backgroundColor": "#0E1A24"
   },
   "server": {
     "androidScheme": "https"
-  }
+  },
+  "backgroundColor": "#0E1A24"
 }
