@@ -482,6 +482,36 @@ $$;
 revoke all on function participant_history(text, text) from public;
 grant execute on function participant_history(text, text) to anon, authenticated;
 
+-- Unlink a badge: the pairing was to the wrong person, or a rehearsal.
+-- A reissue cannot fix that -- it voids the badge for the same pid. This
+-- resets the participant row and removes the badge's scans and link records,
+-- so the badge is a clean spare again. Organiser-only, and logged: the
+-- deleted rows are returned so the admin page can show what went.
+create or replace function unlink_badge(p_code text)
+returns table (scans_removed int, links_removed int)
+language plpgsql security definer set search_path = public as $$
+declare
+  c text := upper(regexp_replace(p_code, '[^0-9A-Za-z]', '', 'g'));
+begin
+  if not is_organiser() then
+    raise exception 'not an organiser' using errcode = '42501';
+  end if;
+  if not exists (select 1 from participants where code = c) then
+    raise exception 'no such badge';
+  end if;
+  delete from scans where code = c;
+  get diagnostics scans_removed = row_count;
+  delete from badge_links where code = c;
+  get diagnostics links_removed = row_count;
+  update participants
+     set pid = null, name = null, void = false, linked_at = null
+   where code = c;
+  return next;
+end;
+$$;
+revoke all on function unlink_badge(text) from public;
+grant execute on function unlink_badge(text) to authenticated;
+
 -- Organisers set or reset a password from the admin page. Stored bcrypt;
 -- the plain text is never written anywhere.
 create or replace function set_volunteer_password(p_id text, p_password text)

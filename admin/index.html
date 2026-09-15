@@ -334,6 +334,22 @@ tr.gap td{background:rgba(229,72,77,.09)}
         <input type="file" id="rollFile" accept=".csv,text/csv" hidden>
       </div>
       <p class="note" id="rollNote" style="margin-top:12px"></p>
+
+      <h2>Find a badge</h2>
+      <p class="note" style="margin-bottom:10px">Look a badge up by its code, or a person by name or ID. <b>Unlink</b> is
+        for a badge paired to the wrong person, or a rehearsal — it removes that badge's scans and link
+        records and makes it a clean spare. A lost badge is a <i>reissue</i> at the desk, not an unlink.</p>
+      <div class="row" style="margin-bottom:10px">
+        <input id="findQ" placeholder="Badge code, name or ID" style="max-width:320px" autocapitalize="off" spellcheck="false">
+        <button class="btn sec" id="findBtn">Search</button>
+      </div>
+      <div class="scroll">
+        <table id="findTable" style="display:none">
+          <thead><tr><th>Badge</th><th>ID</th><th>Name</th><th>State</th><th class="num">Scans</th><th></th></tr></thead>
+          <tbody id="findBody"></tbody>
+        </table>
+      </div>
+      <p class="note" id="findNote"></p>
     </div>
 
     <!-- ---------------- EXPORT ---------------- -->
@@ -952,6 +968,49 @@ function parseRoll(text){
   }
   return out;
 }
+
+async function findBadges(){
+  const q = $("findQ").value.trim(), note = $("findNote");
+  note.classList.remove("bad-text");
+  if (!q){ note.textContent = ""; return; }
+  try{
+    await ensureToken();
+    const code = q.toUpperCase().replace(/[^0-9A-Z]/g, "");
+    const or = [`code.eq.${code}`, `pid.ilike.*${q}*`, `name.ilike.*${q}*`].join(",");
+    const rows = await rest(`/participants?select=code,pid,name,void,linked_at&or=(${or})&order=serial&limit=30`);
+    const counts = rows.length
+      ? await rest(`/scans?select=code&code=in.(${rows.map(r => r.code).join(",")})`)
+      : [];
+    const n = counts.reduce((m, r) => (m[r.code] = (m[r.code] || 0) + 1, m), {});
+    const body = $("findBody"); body.innerHTML = "";
+    for (const r of rows){
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td class="mono">${esc(r.code.slice(0,4) + "-" + r.code.slice(4))}</td>
+        <td>${esc(r.pid || "—")}</td><td>${esc(r.name || "—")}</td>
+        <td>${r.void ? '<span class="tag gap">void</span>' : r.pid ? '<span class="tag live">linked</span>' : '<span class="tag off">spare</span>'}</td>
+        <td class="num">${n[r.code] || 0}</td>
+        <td>${r.pid || r.void || n[r.code] ? '<button class="btn danger sm" data-unlink>Unlink</button>' : ""}</td>`;
+      const btn = tr.querySelector("[data-unlink]");
+      if (btn) btn.addEventListener("click", async () => {
+        if (!confirm(`Unlink badge ${r.code}${r.name ? " from " + r.name : ""}?\n\n` +
+                     `This deletes its ${n[r.code] || 0} scan(s) and its link records and makes it a clean spare. ` +
+                     `If the person simply lost this badge, do a reissue at the desk instead.`)) return;
+        try{
+          const res = await write("POST", "/rpc/unlink_badge", { p_code: r.code });
+          const [out] = await res.json();
+          toast(`Unlinked. ${out.scans_removed} scans and ${out.links_removed} links removed.`);
+          await findBadges(); await renderRoll();
+        }catch(e){ toast(e.message, true); }
+      });
+      body.appendChild(tr);
+    }
+    $("findTable").style.display = rows.length ? "" : "none";
+    note.textContent = rows.length ? `${rows.length} match${rows.length === 1 ? "" : "es"}` : "Nothing matches.";
+  }catch(e){ note.textContent = e.message; note.classList.add("bad-text"); }
+}
+$("findBtn").addEventListener("click", findBadges);
+$("findQ").addEventListener("keydown", e => { if (e.key === "Enter") findBadges(); });
 
 $("rollPick").addEventListener("click", () => $("rollFile").click());
 $("rollFile").addEventListener("change", async e => {
