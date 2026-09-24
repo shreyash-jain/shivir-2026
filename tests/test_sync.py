@@ -46,6 +46,7 @@ class Stub:
         self.mode = "ok"          # ok | hang | reject
         self.hang_seconds = 20
         self.refuse_codes = set()   # codes the "database" has never issued
+        self.already_codes = set()  # once-per-event: another desk got there first
 
     def url(self):
         return f"http://127.0.0.1:{STUB_PORT}"
@@ -99,7 +100,10 @@ def stub():
             s.posts[table] = s.posts.get(table, 0) + 1
             verdicts = []
             for row in json.loads(body or b"{}").get("rows", []):
-                if row.get("code") in s.refuse_codes:
+                if row.get("code") in s.already_codes:
+                    verdicts.append({"uuid": row["uuid"], "status": "duplicate",
+                                     "detail": "already issued"})
+                elif row.get("code") in s.refuse_codes:
                     verdicts.append({"uuid": row["uuid"], "status": "rejected",
                                      "detail": "code was never issued"})
                 elif row["uuid"] in s.rows.setdefault(table, {}):
@@ -346,5 +350,27 @@ def test_one_refused_row_does_not_block_the_rest(server, badges, stub):
         before = stub.posts["scans"]
         push(page); page.wait_for_timeout(600)
         assert stub.posts["scans"] == before
+        assert not errors
+        b.close()
+
+
+def test_certificate_given_twice_offline_is_surfaced(server, badges, stub):
+    """Two desks both offline, one person visits each. The server keeps the
+    first; the second desk must be told, not left believing all is well."""
+    from test_once import cfg as once_cfg, at_certificates
+    stub.already_codes.add(badges["paired"])
+    with sync_playwright() as pw:
+        from browser import open_setup, pick_volunteer
+        b, page, errors = open_setup(pw, "blank.y4m", server, **cfg(stub), **once_cfg())
+        pick_volunteer(page)
+        at_certificates(page)
+        type_into_scanner(page, badges["paired"])       # the phone thinks it is first
+        assert page.inner_text("#sessCount") == "1"
+        push(page); page.wait_for_timeout(1500)
+
+        page.click("#openReview"); page.wait_for_timeout(400)
+        state = page.inner_text("#syncState").lower()
+        assert "already given at another desk" in state, state
+        assert page.inner_text("#rQueue").strip() == "0", "a settled row is still queued"
         assert not errors
         b.close()

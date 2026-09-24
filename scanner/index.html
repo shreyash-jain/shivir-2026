@@ -614,7 +614,18 @@ async function record(raw, source){
   if (person.void) return show("bad","✕","Badge was replaced","A new badge was issued — use that one", pretty(code));
   if (!person.pid) return show("warn","?","Badge not linked yet","Send them to registration to link it", pretty(code));
 
-  const dedupe = `${code}|${S.session.id}|${today()}`;
+  let dedupe = `${code}|${S.session.id}|${today()}`;
+  if (S.session.once){
+    // Once per event: keyed on the PERSON, across every day the desk is open.
+    // A reissued badge carries the same pid, so it cannot collect twice.
+    const had = (await onceIssued()).get(S.session.id)?.get(person.pid);
+    if (had){
+      const when = new Date(had.at).toLocaleString([], {weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"});
+      return show("warn","•", personLabel(person),
+        `Already given — ${when}${had.volunteer ? " by " + had.volunteer : ""}`, pretty(code));
+    }
+    dedupe = `once|${person.pid}|${S.session.id}`;
+  }
   const prior = await seenAlready(dedupe);
   if (prior){
     const t = new Date(prior.at).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
@@ -698,7 +709,15 @@ async function openChoice(p){
   };
   if (p.pid){
     const by = await attendanceToday();
-    const n = todaysSessions().filter(s => by.get(s.id)?.has(p.code)).length;
+    const n = todaysSessions().filter(s => !s.once && by.get(s.id)?.has(p.code)).length;
+    if (hasOnce()){
+      const once = await onceIssued();
+      const bits = S.sessions.filter(s => s.once).map(s => {
+        const had = once.get(s.id)?.get(p.pid);
+        return `${s.name}: ${had ? "given " + new Date(had.at).toLocaleDateString([], {day:"numeric", month:"short"}) : "not yet"}`;
+      });
+      $("chMeta").textContent += " · " + bits.join(" · ");
+    }
     opt("✓", "Mark attendance", "Pick the session, then keep scanning into it", () => openPick(p));
     opt("◷", `See ${personLabel(p)}'s history`, `${n} of ${todaysSessions().length} sessions today`, async () => {
       $("choiceSheet").classList.remove("on");
@@ -1006,6 +1025,9 @@ async function drain(fn, rows, store, toRow){
       const v = verdict.get(x.uuid);
       x.sent = 1;
       if (v && v.status === "rejected") x.rejected = v.detail || "rejected";
+      // Once-per-event: another desk got there first. Settled, not retried,
+      // and shown to the volunteer -- a second certificate physically went out.
+      if (v && v.status === "duplicate" && v.detail) x.rejected = v.detail;
       await tx(store,"readwrite", st => st.put(x));
     }
   }
@@ -1125,7 +1147,9 @@ async function loadConfFromServer(){
 
   try{
     const [sessions, days, assignments] = await Promise.all([
-      get("sessions?select=id,name,venue,starts,ends&order=starts"),
+      // select=* rather than naming columns, so a server that has not yet
+      // run the once-per-event migration still loads instead of failing.
+      get("sessions?select=*&order=starts"),
       get("session_days?select=session_id,day"),
       get("assignments?select=volunteer_id,session_id,day")
     ]);
@@ -1133,7 +1157,8 @@ async function loadConfFromServer(){
     // The scanner speaks start/end; the database speaks starts/ends.
     S.sessions = sessions.map(s => ({
       id:s.id, name:s.name, venue:s.venue,
-      start:String(s.starts).slice(0,5), end:String(s.ends).slice(0,5)
+      start:String(s.starts).slice(0,5), end:String(s.ends).slice(0,5),
+      once: !!s.once
     }));
     S.sessionDays = days.reduce((m,r) => ((m[r.day] = m[r.day] || []).push(r.session_id), m), {});
     S.assignments = assignments;
@@ -1435,7 +1460,10 @@ async function refreshAttendance(){
   if (!S.token || !navigator.onLine || ATT.loading) return false;
   ATT.loading = true;
   try{
-    const rows = await rpcRead("attendance_for_day", { p_token:S.token, p_day:today() }, 20000);
+    const [rows] = await Promise.all([
+      rpcRead("attendance_for_day", { p_token:S.token, p_day:today() }, 20000),
+      refreshOnce()
+    ]);
     if (!Array.isArray(rows)) return false;
     ATT.day = today(); ATT.server = rows; ATT.fetchedAt = Date.now();
     await setMeta("att", { day:ATT.day, server:ATT.server, fetchedAt:ATT.fetchedAt });
@@ -1445,6 +1473,45 @@ async function refreshAttendance(){
     renderAttendance();
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Once-per-event sessions (certificates)
+ *
+ * Everything already handed out, on any day, keyed by participant id: the
+ * server's list as last fetched, merged with this phone's own scans so a
+ * handout shows the instant it happens. Cached for a desk with no signal.
+ * ------------------------------------------------------------------ */
+const ONCE = { server:[], fetchedAt:0 };
+const hasOnce = () => S.sessions.some(s => s.once);
+
+async function loadOnceCache(){
+  const c = await getMeta("once");
+  if (c) Object.assign(ONCE, c);
+}
+async function refreshOnce(){
+  if (!S.token || !navigator.onLine || !hasOnce()) return false;
+  const rows = await rpcRead("once_issued", { p_token:S.token }, 20000);
+  if (!Array.isArray(rows)) return false;
+  ONCE.server = rows; ONCE.fetchedAt = Date.now();
+  await setMeta("once", { server:rows, fetchedAt:ONCE.fetchedAt });
+  return true;
+}
+/* session id -> Map(pid -> { at, volunteer, code, local }) */
+async function onceIssued(){
+  const by = new Map();
+  const add = (sid, pid, code, at, volunteer, local) => {
+    if (!pid) return;
+    if (!by.has(sid)) by.set(sid, new Map());
+    const m = by.get(sid);
+    if (!m.has(pid) || m.get(pid).at > at) m.set(pid, { at, volunteer, code, local });
+  };
+  for (const [sid, pid, code, at, vol] of ONCE.server) add(sid, pid, code, at, vol, false);
+  const ids = new Set(S.sessions.filter(s => s.once).map(s => s.id));
+  if (ids.size) for (const s of await allScans())
+    if (ids.has(s.sessionId) && !s.rejected) add(s.sessionId, s.pid, s.code, s.at, s.volunteer, true);
+  return by;
+}
+const statLabel = s => s?.once ? ["issued", "to go"] : ["present", "absent"];
 
 /* session id -> Map(code -> earliest scanned_at), merged. */
 async function attendanceToday(){
@@ -1473,8 +1540,17 @@ const personLabel = p => p.name || p.pid || pretty(p.code);
 async function sessionStats(){
   const by = await attendanceToday(), exp = await expected();
   const expSet = new Set(exp.map(p => p.code));
+  const once = hasOnce() ? await onceIssued() : new Map();
+  const expPids = new Set(exp.map(p => p.pid));
   const out = new Map();
   for (const s of S.sessions){
+    if (s.once){
+      // Cumulative across the event, not today's count.
+      let n = 0;
+      for (const pid of (once.get(s.id) || new Map()).keys()) if (expPids.has(pid)) n++;
+      out.set(s.id, { present:n, absent:Math.max(0, exp.length - n), total:exp.length, once:true });
+      continue;
+    }
     const m = by.get(s.id) || new Map();
     let present = 0;
     for (const code of m.keys()) if (expSet.has(code)) present++;
@@ -1488,7 +1564,8 @@ async function renderAttendance(){
   // counts on the home rows
   document.querySelectorAll("[data-counts]").forEach(el => {
     const st = stats.get(el.dataset.counts);
-    if (st) el.innerHTML = `<span class="p"><b>${st.present}</b> present</span><span class="a"><b>${st.absent}</b> absent</span>`;
+    const [a, b] = statLabel(st);
+    if (st) el.innerHTML = `<span class="p"><b>${st.present}</b> ${a}</span><span class="a"><b>${st.absent}</b> ${b}</span>`;
   });
   $("freshHome").textContent = freshText();
   $("freshSessions").textContent = freshText();
@@ -1501,11 +1578,12 @@ function renderSessionsPane(stats){
   const list = todaysSessions().sort((a,b) => toMin(a.start) - toMin(b.start));
   if (!list.length){ box.innerHTML = `<p class="note">No sessions scheduled today.</p>`; return; }
   for (const s of list){
-    const st = stats?.get(s.id) || { present:0, absent:0 };
+    const st = stats?.get(s.id) || { present:0, absent:0, once:s.once };
+    const [la, lb] = statLabel(st);
     const b = document.createElement("button");
     b.className = "station";
-    b.innerHTML = `<b>${s.name}</b><span>${s.venue} · ${s.start}–${s.end}</span>
-      <div class="counts"><span class="p"><b>${st.present}</b> present</span><span class="a"><b>${st.absent}</b> absent</span></div>`;
+    b.innerHTML = `<b>${s.name}</b><span>${s.venue} · ${s.start}–${s.end}${s.once ? " · once per event" : ""}</span>
+      <div class="counts"><span class="p"><b>${st.present}</b> ${la}</span><span class="a"><b>${st.absent}</b> ${lb}</span></div>`;
     b.addEventListener("click", () => openList(s));
     box.appendChild(b);
   }
@@ -1515,7 +1593,7 @@ async function renderPeoplePane(){
   const q = $("peopleQ").value.trim().toLowerCase();
   const all = await people();
   const by = await attendanceToday();
-  const todays = todaysSessions().map(s => s.id);
+  const todays = todaysSessions().filter(s => !s.once).map(s => s.id);
   const rows = all.filter(p => p.pid && !q ||
       (q && ((p.name || "").toLowerCase().includes(q) || (p.pid || "").toLowerCase().includes(q) || p.code.includes(q.toUpperCase().replace(/[^0-9A-Z]/g,"")))))
     .sort((a,b) => personLabel(a).localeCompare(personLabel(b)));
@@ -1538,6 +1616,9 @@ let LIST = { session:null, seg:"present" };
 async function openList(s){
   LIST = { session:s, seg:"present" };
   $("listTitle").textContent = s.name;
+  const [la, lb] = statLabel(s);
+  document.querySelector("[data-seg=present]").textContent = la[0].toUpperCase() + la.slice(1);
+  document.querySelector("[data-seg=absent]").textContent  = lb[0].toUpperCase() + lb.slice(1);
   $("listQ").value = "";
   document.querySelectorAll("[data-seg]").forEach(b => b.classList.toggle("on", b.dataset.seg === "present"));
   $("listSheet").classList.add("on");
@@ -1545,19 +1626,30 @@ async function openList(s){
 }
 async function renderList(){
   const s = LIST.session; if (!s) return;
-  const by = await attendanceToday(), m = by.get(s.id) || new Map();
   const exp = await expected();
+  let m;
+  if (s.once){
+    // code -> when given, looked up through the person, since a reissued
+    // badge still counts as that person's handout.
+    const once = (await onceIssued()).get(s.id) || new Map();
+    m = new Map(exp.filter(p => once.has(p.pid)).map(p => [p.code, once.get(p.pid).at]));
+  } else {
+    m = (await attendanceToday()).get(s.id) || new Map();
+  }
   const q = $("listQ").value.trim().toLowerCase();
   const rows = exp.filter(p => (LIST.seg === "present") === m.has(p.code))
     .filter(p => !q || (p.name||"").toLowerCase().includes(q) || (p.pid||"").toLowerCase().includes(q))
     .sort((a,b) => LIST.seg === "present" ? (m.get(a.code) < m.get(b.code) ? 1 : -1) : personLabel(a).localeCompare(personLabel(b)));
-  $("listMeta").textContent = `${rows.length} ${LIST.seg} · ${freshText()}`;
+  const [la, lb] = statLabel(s);
+  $("listMeta").textContent = `${rows.length} ${LIST.seg === "present" ? la : lb}${s.once ? " across all days" : ""} · ${freshText()}`;
   const box = $("listBody"); box.innerHTML = "";
   for (const p of rows.slice(0, 150)){
     const d = document.createElement("div");
     d.className = "row-p";
     d.innerHTML = `<div><div class="nm">${personLabel(p)}</div><div class="id">${p.pid} · ${pretty(p.code)}</div></div>
-      <div class="st ${LIST.seg === "present" ? "p" : "a"}">${LIST.seg === "present" ? hhmm(m.get(p.code)) : "—"}</div>`;
+      <div class="st ${LIST.seg === "present" ? "p" : "a"}">${LIST.seg !== "present" ? "—"
+        : s.once ? new Date(m.get(p.code)).toLocaleString([], {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"})
+        : hhmm(m.get(p.code))}</div>`;
     d.addEventListener("click", () => openPerson(p));
     box.appendChild(d);
   }
@@ -1570,10 +1662,20 @@ async function openPerson(p){
   $("personMeta").textContent = `${p.pid ? "ID " + p.pid : "Not linked to a participant"} · badge ${pretty(p.code)}${p.void ? " · VOID" : ""}`;
   const by = await attendanceToday();
   const box = $("personToday"); box.innerHTML = "";
-  for (const s of todaysSessions().sort((a,b) => toMin(a.start) - toMin(b.start))){
+  for (const s of todaysSessions().filter(s => !s.once).sort((a,b) => toMin(a.start) - toMin(b.start))){
     const ts = by.get(s.id)?.get(p.code);
     box.insertAdjacentHTML("beforeend",
-      `<div><span>${s.name}</span><em class="${ts ? "" : ""}" style="color:${ts ? "var(--ok)" : "var(--warn)"}">${ts ? "present · " + hhmm(ts) : "absent"}</em></div>`);
+      `<div><span>${s.name}</span><em style="color:${ts ? "var(--ok)" : "var(--warn)"}">${ts ? "present · " + hhmm(ts) : "absent"}</em></div>`);
+  }
+  // Once-per-event: whether they have had it, whichever day it was.
+  if (hasOnce()){
+    const once = await onceIssued();
+    for (const s of S.sessions.filter(s => s.once)){
+      const had = p.pid && once.get(s.id)?.get(p.pid);
+      const when = had && new Date(had.at).toLocaleString([], {day:"numeric", month:"short", hour:"2-digit", minute:"2-digit"});
+      box.insertAdjacentHTML("beforeend",
+        `<div><span>${s.name}</span><em style="color:${had ? "var(--ok)" : "var(--warn)"}">${had ? `given · ${when}${had.volunteer ? " · " + had.volunteer : ""}` : "not yet"}</em></div>`);
+    }
   }
   $("personHist").innerHTML = "";
   $("personHistMeta").textContent = S.token && navigator.onLine ? "Fetching…" : "Needs signal.";
@@ -1598,7 +1700,7 @@ function sessionButton(s, assigned){
   b.className = "station" + (live ? "" : " idle");
   if (!assigned) b.style.borderLeftColor = "var(--warn)";
   b.innerHTML = `<b>${s.name}</b><span>${s.venue} · ${s.start}–${s.end}${
-    live ? " · on now" : ""}</span><div class="counts" data-counts="${s.id}"></div>`;
+    live ? " · on now" : ""}${s.once ? " · once per event" : ""}</span><div class="counts" data-counts="${s.id}"></div>`;
   b.addEventListener("click", () => {
     if (!assigned){
       // Deliberate friction. Scanning into a session you were not put on is
@@ -1719,7 +1821,14 @@ async function refreshReview(){
   st.textContent = !S.supaUrl || !S.supaKey
       ? "No server configured — export the CSV at the end of the day."
     : lastSyncError ? lastSyncError
-    : refused ? `Server refused ${refused} record${refused === 1 ? "" : "s"} — badge not on the roll. Kept on this phone; see the CSV export.`
+    : refused ? (() => {
+        const all = [...scans, ...links].filter(x => x.rejected);
+        const dup = all.filter(x => x.rejected === "already issued").length;
+        const parts = [];
+        if (all.length - dup) parts.push(`${all.length - dup} not on the roll`);
+        if (dup) parts.push(`${dup} already given at another desk — tell the admin`);
+        return `Server refused ${refused} record${refused === 1 ? "" : "s"}: ${parts.join("; ")}. Kept on this phone; see the CSV export.`;
+      })()
     : !navigator.onLine ? "No signal. Everything is saved and will send later."
     : waiting ? "Sending…"
     : "Everything on this phone has been sent.";
@@ -1966,6 +2075,7 @@ $("shareCfg").addEventListener("click", async () => {
   describeConf();
 
   await loadAttCache();
+  await loadOnceCache();
   S.people = await countPeople();
   if (S.people){
     $("codeState").textContent = `${S.people} participants already on this phone.`;

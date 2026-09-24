@@ -205,6 +205,12 @@ tr.gap td{background:rgba(229,72,77,.09)}
         Nothing scheduled for this day. Add sessions, then tick them on the Calendar tab.
       </p>
 
+      <div id="onceWrap" style="display:none">
+        <h2>Once per event</h2>
+        <p class="note" style="margin:0 0 10px">Counted per person across every day, not just the day selected above.</p>
+        <div id="onceList"></div>
+      </div>
+
       <h2>Absentees</h2>
       <div class="row" style="margin-bottom:12px">
         <select id="absSess" style="width:auto;min-width:230px"></select>
@@ -220,6 +226,7 @@ tr.gap td{background:rgba(229,72,77,.09)}
       <p class="note" id="absNote"></p>
     </div>
 
+    <!-- once-per-event panel lives on the Live tab, see renderOnce() -->
     <!-- ---------------- SESSIONS ---------------- -->
     <div class="tabpane" data-pane="sessions">
       <p class="hint">
@@ -227,13 +234,17 @@ tr.gap td{background:rgba(229,72,77,.09)}
         is what assignments are for. The <b>id</b> is what lands on every scan
         and is shared across all ten days, so keep it short and never reuse one
         for a different thing. Changing a time here does not move scans already
-        recorded.
+        recorded.<br><br>
+        Tick <b>Once per event</b> for something a person receives exactly once
+        however many days the desk is open — certificate distribution, kit
+        handout. Those are counted per person across all days, the desk warns
+        "already given", and they never make anyone "absent".
       </p>
       <div class="scroll">
         <table>
           <thead><tr>
             <th style="min-width:130px">Id</th><th style="min-width:160px">Name</th>
-            <th style="min-width:140px">Venue</th><th>Starts</th><th>Ends</th><th></th>
+            <th style="min-width:140px">Venue</th><th>Starts</th><th>Ends</th><th>Once per event</th><th></th>
           </tr></thead>
           <tbody id="sessBody"></tbody>
         </table>
@@ -245,6 +256,7 @@ tr.gap td{background:rgba(229,72,77,.09)}
         <input id="nsVenue" placeholder="Venue" style="max-width:170px">
         <input id="nsStart" type="time" value="09:00" style="max-width:130px">
         <input id="nsEnd" type="time" value="10:00" style="max-width:130px">
+        <label class="note" style="display:inline-flex;gap:8px;align-items:center"><input type="checkbox" id="nsOnce"> Once per event</label>
         <button class="btn" id="addSess">Add</button>
       </div>
       <p class="note" id="sessNote"></p>
@@ -345,7 +357,7 @@ tr.gap td{background:rgba(229,72,77,.09)}
       </div>
       <div class="scroll">
         <table id="findTable" style="display:none">
-          <thead><tr><th>Badge</th><th>ID</th><th>Name</th><th>State</th><th class="num">Scans</th><th></th></tr></thead>
+          <thead><tr><th>Badge</th><th>ID</th><th>Name</th><th>State</th><th class="num">Scans</th><th>Once per event</th><th></th></tr></thead>
           <tbody id="findBody"></tbody>
         </table>
       </div>
@@ -519,7 +531,7 @@ function toast(msg, bad){
 
 async function loadConfig(){
   const [sessions, days, volunteers] = await Promise.all([
-    rest("/sessions?select=id,name,venue,starts,ends&order=starts"),
+    rest("/sessions?select=*&order=starts"),
     rest("/session_days?select=session_id,day&order=day"),
     rest("/volunteers?select=id,name,username,phone,active,has_password:pass_hash&order=name")
   ]);
@@ -564,6 +576,18 @@ async function loadDay(day){
                { id, name: id, venue: "—", starts: "00:00", ends: "00:00", unknown: true })
     .map(s => ({ ...s, present: present[s.id] || 0, unscheduled: !scheduled.includes(s.id) }))
     .sort((a,b) => toMin(a.starts) - toMin(b.starts));
+
+  // Once-per-event sessions count every day, not just this one.
+  D.once = [];
+  for (const s of D.sessions.filter(s => s.once)){
+    const [issued, conflicts] = await Promise.all([
+      head(`/scans?select=uuid&session_id=eq.${encodeURIComponent(s.id)}`),
+      head(`/once_conflicts?select=id&session_id=eq.${encodeURIComponent(s.id)}`)
+    ]);
+    D.once.push({ ...s, issued, conflicts });
+    const row = D.rows.find(r => r.id === s.id);
+    if (row) row.present = issued;
+  }
 }
 
 const volName = id => (D.volunteers.find(v => v.id === id) || {}).name || id;
@@ -596,7 +620,7 @@ function renderLive(){
     const tr = document.createElement("tr");
     tr.className = live ? "now" : on.length ? "" : "gap";
     tr.innerHTML = `
-      <td><b>${esc(r.name)}</b></td>
+      <td><b>${esc(r.name)}</b>${r.once ? ' <span class="tag soon" title="Counted across all days">once · all days</span>' : ""}</td>
       <td>${esc(r.venue)}</td>
       <td class="mono">${hhmm(r.starts)}–${hhmm(r.ends)}</td>
       <td>${on.length
@@ -619,10 +643,96 @@ function renderLive(){
     body.appendChild(tr);
   }
 
+  renderOnce();
   const sel = $("absSess"), keep = sel.value;
-  sel.innerHTML = D.rows.map(r =>
+  sel.innerHTML = D.rows.filter(r => !r.once).map(r =>
     `<option value="${esc(r.id)}">${esc(r.name)} · ${esc(r.venue)}</option>`).join("");
   if (keep && D.rows.some(r => r.id === keep)) sel.value = keep;
+}
+
+/* ---------------------------------------------------------------- once per event */
+
+function renderOnce(){
+  const wrap = $("onceWrap"), box = $("onceList");
+  wrap.style.display = D.once && D.once.length ? "" : "none";
+  box.innerHTML = "";
+  for (const s of D.once || []){
+    const expected = D.totals.linked, togo = Math.max(0, expected - s.issued);
+    const pct = expected ? Math.min(100, Math.round(s.issued / expected * 100)) : 0;
+    const card = document.createElement("div");
+    card.className = "card"; card.style.marginBottom = "12px";
+    card.innerHTML = `
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <div><b>${esc(s.name)}</b> <span class="note">· ${esc(s.venue)}</span></div>
+        ${s.conflicts ? `<span class="tag gap">${s.conflicts} given twice</span>` : ""}
+      </div>
+      <div class="row" style="gap:18px;margin-bottom:10px">
+        <div><span class="note">Issued</span><div style="font-size:24px;font-weight:680">${s.issued.toLocaleString()}</div></div>
+        <div><span class="note">Not yet</span><div style="font-size:24px;font-weight:680">${togo.toLocaleString()}</div></div>
+        <div style="flex:1;min-width:140px"><div class="bar-track"><div class="bar-fill ${pct >= 80 ? "high" : ""}" style="width:${pct}%"></div></div>
+          <span class="note">${pct}% of ${expected.toLocaleString()} linked participants</span></div>
+      </div>
+      <div class="row">
+        <button class="btn sec sm" data-dl="issued">Download issued</button>
+        <button class="btn sec sm" data-dl="notyet">Download not yet</button>
+        ${s.conflicts ? `<button class="btn sec sm" data-conf>Show given twice</button>` : ""}
+      </div>
+      <div data-confbox style="margin-top:10px"></div>`;
+    card.querySelector("[data-dl=issued]").addEventListener("click", () => onceIssuedCsv(s));
+    card.querySelector("[data-dl=notyet]").addEventListener("click", () => onceNotYetCsv(s));
+    const cb = card.querySelector("[data-conf]");
+    if (cb) cb.addEventListener("click", () => showConflicts(s, card.querySelector("[data-confbox]")));
+    box.appendChild(card);
+  }
+}
+
+async function onceIssuedRows(s){
+  await ensureToken();
+  // Embeds the participant through the scans.code foreign key.
+  const rows = await fetchAll(`/scans?select=uuid,code,scanned_at,day,volunteer,device,participants(pid,name)` +
+                              `&session_id=eq.${encodeURIComponent(s.id)}&order=scanned_at`);
+  return rows.map(r => ({ ...r, pid: r.participants?.pid || "", name: r.participants?.name || "" }));
+}
+const istTime = iso => new Date(iso).toLocaleString([], {day:"2-digit", month:"short", hour:"2-digit", minute:"2-digit"});
+
+async function onceIssuedCsv(s){
+  try{
+    const rows = (await onceIssuedRows(s)).map(r => ({ ...r, given_at: istTime(r.scanned_at) }));
+    download(`${s.id}-issued.csv`, toCsv(["name","pid","code","given_at","volunteer","device"], rows));
+    toast(`${rows.length} issued.`);
+  }catch(e){ toast(e.message, true); }
+}
+async function onceNotYetCsv(s){
+  try{
+    await ensureToken();
+    const [issued, ppl] = await Promise.all([
+      onceIssuedRows(s),
+      fetchAll("/participants?select=code,pid,name&void=is.false&pid=not.is.null&order=name")
+    ]);
+    const had = new Set(issued.map(r => r.pid).filter(Boolean));
+    const rows = ppl.filter(p => !had.has(p.pid));
+    download(`${s.id}-not-yet.csv`, toCsv(["name","pid","code"], rows));
+    toast(`${rows.length} not yet.`);
+  }catch(e){ toast(e.message, true); }
+}
+async function showConflicts(s, box){
+  try{
+    await ensureToken();
+    const rows = await rest(`/once_conflicts?select=id,pid,code,scanned_at,volunteer,device&session_id=eq.${encodeURIComponent(s.id)}&order=scanned_at`);
+    box.innerHTML = `<p class="note" style="margin:0 0 6px">A second handout recorded offline at another desk. The first one is kept; these are the extra ones that physically went out.</p>
+      <div class="scroll"><table><thead><tr><th>ID</th><th>Badge</th><th>Second time</th><th>By</th><th></th></tr></thead><tbody></tbody></table></div>`;
+    const tb = box.querySelector("tbody");
+    for (const r of rows){
+      const tr = document.createElement("tr");
+      tr.innerHTML = `<td>${esc(r.pid || "—")}</td><td class="mono">${esc(r.code)}</td><td>${esc(istTime(r.scanned_at))}</td>
+        <td>${esc(r.volunteer || "—")}</td><td><button class="btn sec sm">Resolved</button></td>`;
+      tr.querySelector("button").addEventListener("click", async () => {
+        try{ await write("DELETE", `/once_conflicts?id=eq.${r.id}`); tr.remove(); toast("Marked resolved."); }
+        catch(e){ toast(e.message, true); }
+      });
+      tb.appendChild(tr);
+    }
+  }catch(e){ toast(e.message, true); }
 }
 
 /* ---------------------------------------------------------------- sessions */
@@ -638,7 +748,22 @@ function renderSessions(){
       <td><input value="${esc(s.venue)}" data-f="venue"></td>
       <td><input type="time" value="${hhmm(s.starts)}" data-f="starts"></td>
       <td><input type="time" value="${hhmm(s.ends)}" data-f="ends"></td>
+      <td style="text-align:center"><input type="checkbox" data-once ${s.once ? "checked" : ""}></td>
       <td><button class="btn danger sm" data-del>Delete</button></td>`;
+
+    const once = tr.querySelector("[data-once]");
+    once.addEventListener("change", async () => {
+      if (!once.checked && !confirm(`Make "${s.name}" an ordinary session again?\n\n` +
+          `Scans already recorded stay. New scans will be counted per day, and a person could be recorded again on another day.`)){
+        once.checked = true; return;
+      }
+      try{
+        await write("PATCH", `/sessions?id=eq.${encodeURIComponent(s.id)}`, { once: once.checked });
+        s.once = once.checked;
+        toast(once.checked ? "Once per event. Phones pick this up at their next login with signal." : "Ordinary session again.");
+        await refreshDay();
+      }catch(e){ once.checked = !once.checked; toast(e.message, true); }
+    });
 
     tr.querySelectorAll("[data-f]").forEach(inp => {
       inp.addEventListener("change", async () => {
@@ -684,7 +809,8 @@ $("addSess").addEventListener("click", async () => {
   }
   try{
     await write("POST", "/sessions", [{
-      id, name, venue, starts: $("nsStart").value, ends: $("nsEnd").value
+      id, name, venue, starts: $("nsStart").value, ends: $("nsEnd").value,
+      ...($("nsOnce").checked ? { once: true } : {})
     }], "return=minimal");
     $("nsId").value = $("nsName").value = $("nsVenue").value = "";
     note.textContent = "Added. Tick the days it runs on the Calendar tab.";
@@ -979,8 +1105,11 @@ async function findBadges(){
     const or = [`code.eq.${code}`, `pid.ilike.*${q}*`, `name.ilike.*${q}*`].join(",");
     const rows = await rest(`/participants?select=code,pid,name,void,linked_at&or=(${or})&order=serial&limit=30`);
     const counts = rows.length
-      ? await rest(`/scans?select=code&code=in.(${rows.map(r => r.code).join(",")})`)
+      ? await rest(`/scans?select=uuid,code,session_id,scanned_at,volunteer&code=in.(${rows.map(r => r.code).join(",")})`)
       : [];
+    const onceIds = new Set(D.sessions.filter(s => s.once).map(s => s.id));
+    const onceBy = {};                       // code -> [scan in a once session]
+    for (const c of counts) if (onceIds.has(c.session_id)) (onceBy[c.code] = onceBy[c.code] || []).push(c);
     const n = counts.reduce((m, r) => (m[r.code] = (m[r.code] || 0) + 1, m), {});
     const body = $("findBody"); body.innerHTML = "";
     for (const r of rows){
@@ -990,7 +1119,28 @@ async function findBadges(){
         <td>${esc(r.pid || "—")}</td><td>${esc(r.name || "—")}</td>
         <td>${r.void ? '<span class="tag gap">void</span>' : r.pid ? '<span class="tag live">linked</span>' : '<span class="tag off">spare</span>'}</td>
         <td class="num">${n[r.code] || 0}</td>
+        <td data-once></td>
         <td>${r.pid || r.void || n[r.code] ? '<button class="btn danger sm" data-unlink>Unlink</button>' : ""}</td>`;
+      // Each once-per-event handout on this badge, with an undo. Admin-only
+      // by design: an undo at the desk would make the record meaningless.
+      const oc = tr.querySelector("[data-once]");
+      for (const sc of onceBy[r.code] || []){
+        const sname = (D.sessions.find(s => s.id === sc.session_id) || {}).name || sc.session_id;
+        const span = document.createElement("div");
+        span.className = "row"; span.style.gap = "6px";
+        span.innerHTML = `<span class="note">${esc(sname)} · ${esc(istTime(sc.scanned_at))}</span><button class="btn sec sm">Undo</button>`;
+        span.querySelector("button").addEventListener("click", async () => {
+          if (!confirm(`Undo "${sname}" for ${r.name || r.code}?\n\nGiven ${istTime(sc.scanned_at)}${sc.volunteer ? " by " + sc.volunteer : ""}. ` +
+                       `Only do this if it was scanned by mistake — they will then be able to collect again.`)) return;
+          try{
+            await write("POST", "/rpc/undo_scan", { p_uuid: sc.uuid });
+            toast("Undone. Phones see it at their next refresh with signal.");
+            await findBadges(); await refreshDay();
+          }catch(e){ toast(e.message, true); }
+        });
+        oc.appendChild(span);
+      }
+      if (!oc.children.length) oc.innerHTML = '<span class="note">—</span>';
       const btn = tr.querySelector("[data-unlink]");
       if (btn) btn.addEventListener("click", async () => {
         if (!confirm(`Unlink badge ${r.code}${r.name ? " from " + r.name : ""}?\n\n` +

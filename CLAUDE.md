@@ -70,6 +70,15 @@ QR sparse and fast to read.
 - Never use localStorage or sessionStorage for scan data.
 - Each scan carries a client-generated UUID and a dedupe key
   (`code|session_id|day`) so retries are idempotent.
+- **Except once-per-event sessions** (`sessions.once`, e.g. certificate
+  distribution running over several days). Those de-duplicate on the person:
+  `once|pid|session_id`, no day, no badge — so a handout on Tuesday blocks
+  Thursday, and a reissued badge cannot collect again. `ingest_scans()` sets
+  this key itself from the session flag rather than trusting the phone, so an
+  old APK cannot let a second one through. A second handout recorded offline
+  at another desk is kept in `once_conflicts` for the admin, not dropped:
+  the physical item already went out. Once sessions are excluded from
+  absentees and attendance counts; only an organiser can undo one.
 - The participant list lives on the phone. The app fetches `codes.csv` once
   on setup over wifi and then never needs the network again.
 - A retry must be a silent no-op. A phone cannot tell "the server never got
